@@ -1,16 +1,183 @@
 # Personal Ambient Recorder and Recall System
 
-> **Implementation amendment (2026-07-25):** The user removed the
-> RecallWhisper server. The Android app is now the authoritative store and calls
-> separately configured OpenAI-compatible transcription and summarization APIs
-> directly. Audio, raw API output, transcripts, summaries, search data, and
-> export metadata remain on the phone. Server-specific sections below describe
-> the original baseline and are superseded by this amendment.
+> **Implementation amendment (2026-07-25):** The original architecture below
+> remains the design baseline, but the current application intentionally differs
+> from it as recorded in section 0. There is no RecallWhisper backend service.
 
-**Specification version:** 1.0  
+**Specification version:** 1.1  
 **Target platform:** Android application built with Flutter and a native Kotlin recording engine  
 **Processing model:** Self-hosted dedicated ASR plus an OpenAI-compatible text LLM  
 **Primary use case:** Continuous, user-controlled ambient speech capture, transcription, organization, summarization, and future recall
+
+---
+
+# 0. Current implementation and deviations
+
+This section is authoritative for the current application. Requirements in
+later sections that conflict with this section describe the original baseline
+or future work and are not implemented requirements.
+
+## 0.1 Current data flow
+
+```text
+Android microphone
+        ↓
+Continuous native Silero VAD
+        ↓
+Encrypted WAV speech segments in private app storage
+        ↓
+WorkManager processing queue
+        ↓
+Configured OpenAI-compatible transcription API
+        ↓
+Raw response and transcript stored in Room
+        ↓
+Configured OpenAI-compatible summarization API
+        ↓
+Contiguous timestamped topic episode
+        ↓
+Episode summary linked to a stable canonical topic
+        ↓
+Local segment timeline, topic timeline, text search, playback, deletion, and JSON export
+```
+
+The phone is the authoritative durable store. RecallWhisper does not upload to,
+depend on, or synchronize with a RecallWhisper-owned server.
+
+## 0.2 Deviation register
+
+| Original baseline | Current implementation |
+|---|---|
+| A RecallWhisper ingestion server permanently stores and processes uploaded data. | The ingestion server has been removed. The phone stores segment metadata, encrypted audio, raw transcription responses, transcripts, summaries, processing errors, and checksums. |
+| One server URL and authentication path handle synchronization. | Transcription and summarization have independent base URLs, bearer tokens, and model names. Tokens are encrypted with an Android Keystore-backed key. |
+| The server runs `faster-whisper`. | RecallWhisper calls any configured OpenAI-compatible `POST /v1/audio/transcriptions` endpoint. The ASR implementation and model hosting are external to the app. |
+| The server owns the text LLM pipeline. | RecallWhisper directly calls a separately configured OpenAI-compatible `POST /v1/chat/completions` endpoint. |
+| Segments are uploaded in batches to an idempotent ingestion API. | WorkManager processes locally queued segments individually. It decrypts each segment in memory, transcribes it, optionally summarizes it, and stores the results locally. Wi-Fi/unmetered networking is the default; cellular is opt-in. |
+| Upload/server processing states describe remote ingestion jobs. | The existing `uploadState` and `serverState` fields are retained as legacy names for local API-processing state. There is no RecallWhisper server state to synchronize. |
+| Ogg Opus is the normal stored format, with AAC fallback. | The current recorder writes PCM16 WAV and then encrypts it as `.wav.enc`. Opus/AAC encoding is not implemented. |
+| The default trailing-silence timeout is 1.8 seconds. | Conversation pause tolerance is user-configurable from 5–60 seconds and defaults to 30 seconds. This intentionally keeps nearby speech in a continuous recording. |
+| Separate Room entities track configuration, upload attempts, server status, tombstones, and device events. | A single `capture_segment` entity currently holds capture, encryption, processing, transcript, summary, and error fields. Configuration is stored in encrypted/shared preferences where appropriate. |
+| Summarization occurs after conversation reconstruction and normalization. | Successfully transcribed capture segments are grouped into provisional contiguous topic episodes using boot/session, inactivity-gap, and maximum-duration boundaries. Each closed group is summarized once and linked to a stable canonical topic. Semantic embeddings, offline reconciliation, transcript normalization, and manual merge/split controls remain future work. |
+| Summary JSON is schema-validated and every extracted claim must carry evidence spans. | The app requests JSON output using an editable system prompt, but currently performs no JSON-schema, evidence-span, or timestamp-range validation. |
+| Search combines full-text indexing, embeddings, filters, and evidence-backed recall. | Search is local SQL substring matching over transcript and summary text. There is no FTS index, vector index, semantic retrieval, or generated recall answer. |
+| Audio playback links can begin at an evidence timestamp. | The timeline can decrypt and play or stop an entire local recording. Seeking to an evidence timestamp is not implemented. |
+| Export and deletion cover synchronized phone and server data. | Segment deletion removes the local encrypted audio and Room row only. JSON export uses Android's document picker and exports local metadata and derived text; encrypted audio files are not embedded in the JSON. |
+| Retention workers remove local audio after successful transcription and apply server retention policies. | No automatic retention or pruning policy is implemented. Audio remains on the phone until the user deletes it or application data is removed. |
+| Recovery finalizes recoverable temporary recordings and records diagnostic events. | Startup renames unfinished `.wav.tmp` files as corrupt. It does not reconstruct them or persist a recovery-event record. |
+| The notification includes pause/resume, save-recent, open, and stop actions. | The notification provides open, pause/resume, and stop. Save-recent is not implemented. A Quick Settings recorder tile is implemented. |
+| HTTPS is always required for remote APIs. | HTTPS remains the default. A user-controlled “Allow insecure HTTP” setting permits plain HTTP for trusted development networks. It does not disable HTTPS certificate validation. |
+| Server observability and extensive device metrics are collected. | The app exposes processing state/errors and a debug API playground, but does not implement the complete metrics sets in section 27. |
+
+## 0.3 Added current features
+
+The following features were added beyond the original phased implementation:
+
+- Local encrypted playback from the recording timeline.
+- Local deletion of individual recordings.
+- User-selected JSON export through Android storage access.
+- Separate transcription and summarization endpoint configuration.
+- Separate encrypted bearer tokens and model selections for both APIs.
+- Editable summarization system prompt.
+- Summarization API playground with model discovery, arbitrary input text,
+  JSON-mode selection, temperature, top-p, token limit, frequency penalty,
+  presence penalty, latency, output, and error inspection.
+- Transcription server connectivity/model check using its authenticated
+  `/v1/models` endpoint.
+- Explicit opt-in for insecure HTTP API URLs.
+- Provisional topic episodes with configurable inactivity and duration limits.
+- Stable opaque canonical-topic IDs that link recurring, noncontiguous episodes.
+- A topic-centered timeline that preserves each episode's original time range.
+- A configurable summary language. The default follows the transcript's primary
+  language; users may specify a language such as English or Simplified Chinese.
+
+## 0.6 Continuous-transcript organization and summary contract
+
+RecallWhisper shall not treat continuous capture as one endless document and
+shall not maintain one destructive rolling summary. The implemented summary
+pipeline is:
+
+```text
+immutable timestamped capture segments
+        ↓
+provisional contiguous topic episodes
+        ↓
+one structured summary per episode
+        ↓
+canonical topic matching/linking
+        ↓
+topic-centered timeline of separate occurrences
+```
+
+An **episode** is one contiguous occurrence. A **canonical topic** is a stable
+persistent subject that may recur across many noncontiguous episodes. Separate
+occurrences must never be collapsed into one timestamp range.
+
+The phone retains the original ASR transcript and raw ASR response on each
+capture segment. Episode processing references segments rather than copying or
+replacing their source text. Topic and episode IDs are opaque and stable;
+model-generated titles may change without becoming database identities.
+
+The current online episode boundary rules are deliberately deterministic:
+
+- a device boot boundary always starts a new episode;
+- an inactivity gap starts a new episode (default 5 minutes, configurable
+  3–10 minutes);
+- the maximum episode duration closes an episode (default 30 minutes,
+  configurable 10–60 minutes).
+
+The summarization model receives timestamped text for the whole episode and a
+bounded list of existing canonical topics. It must return strict JSON containing
+the local episode title, episode summary, primary canonical topic, hierarchy
+path, secondary topic tags, keywords, decisions, actions, questions, and
+uncertainties. A returned canonical topic ID is accepted only when it exactly
+matches an ID supplied by the app; otherwise the app creates a new opaque ID.
+All natural-language output fields must use the configured summary language.
+
+Topic-specific state is append-oriented. Every episode summary remains stored
+separately, while the canonical topic stores a replaceable cumulative summary
+for browsing. The episode records are the historical source of truth.
+
+The following supplied best-practice stages remain explicit future work:
+
+- 30–90 second overlapping analysis windows independent of audio file size;
+- embeddings and combined semantic, lexical, speaker, and discourse scoring;
+- ambiguous-boundary classification and gradual-drift detection;
+- parenthetical-event and important micro-episode handling;
+- offline hourly reconciliation of provisional boundaries;
+- duplicate-topic merge proposals with aliases/redirects;
+- hourly and daily summaries generated from episode summaries;
+- evidence-span validation and timestamp-seek playback.
+
+## 0.4 TLS and OpenASR compatibility boundary
+
+The current HTTP client uses Android's standard TLS trust validation and
+standard OpenAI bearer authentication. It does not implement:
+
+- Trust-on-first-use or certificate fingerprint pinning.
+- Trust of arbitrary self-signed certificates.
+- OpenASR pairing request, approval, or credential retrieval.
+- The OpenASR `x-openasr-remote-compute: client` authentication flow.
+
+An OpenASR server using `--tls-self-signed` therefore requires a trusted HTTPS
+reverse proxy, a certificate trusted by Android, or future client-side
+certificate-pinning and pairing support. Enabling insecure HTTP does not make a
+self-signed HTTPS certificate trusted.
+
+## 0.5 Remaining baseline work
+
+The following major baseline capabilities remain future work:
+
+- Opus/AAC encoding and codec negotiation.
+- Recoverable atomic-finalization workflow and richer crash diagnostics.
+- Automatic retention controls and date-range deletion.
+- Semantic episode-boundary reconciliation and user merge/split controls.
+- Transcript normalization and transcript correction.
+- Structured evidence validation, hourly/daily digests, and summary versioning.
+- Diarization, speaker naming, and voice enrollment.
+- Full-text indexing, embeddings, hybrid recall, and memory promotion.
+- Evidence-linked transcript navigation and timestamped playback.
+- The soak, battery, device-matrix, and recorded-corpus validation described in
+  section 28.
 
 ---
 

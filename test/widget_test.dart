@@ -67,4 +67,211 @@ void main() {
     await tester.pumpAndSettle();
     expect(sent, isTrue);
   });
+
+  testWidgets('timeline separates transcription and summary states', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'timeline') {
+            return <Object>[
+              <String, Object?>{
+                'id': 'episode-1',
+                'startedAt': 0,
+                'summary': '{"summary":"Short summary."}',
+                'summaryState': 'COMPLETE',
+                'segments': <Object>[
+                  <String, Object?>{
+                    'id': 'segment-1',
+                    'startedAt': 0,
+                    'transcript': 'First spoken text.',
+                    'transcriptionState': 'COMPLETE',
+                  },
+                  <String, Object?>{
+                    'id': 'segment-2',
+                    'startedAt': 1000,
+                    'transcript': 'Second spoken text.',
+                    'transcriptionState': 'COMPLETE',
+                  },
+                ],
+              },
+            ];
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+    expect(find.text('Short summary.'), findsOneWidget);
+    expect(find.text('complete'), findsOneWidget);
+    expect(find.text('2 segments'), findsOneWidget);
+    await tester.tap(find.text('Transcript'));
+    await tester.pumpAndSettle();
+    expect(find.text('First spoken text.'), findsOneWidget);
+    expect(find.text('Second spoken text.'), findsOneWidget);
+  });
+
+  testWidgets('timeline does not render an empty summary as content', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'timeline') {
+            return <Object>[
+              <String, Object?>{
+                'startedAt': 0,
+                'transcript': 'Spoken text.',
+                'summary': '',
+                'transcriptionState': 'COMPLETE',
+                'summaryState': 'COMPLETE',
+              },
+            ];
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+    expect(find.text('No summary yet.'), findsOneWidget);
+  });
+
+  testWidgets('timeline clearly shows an active summary workflow', (
+    tester,
+  ) async {
+    var running = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'timeline') return <Object>[];
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': running,
+            };
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: true);
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pump();
+    expect(find.text('Summary is running…'), findsOneWidget);
+    expect(find.text('Summarizing…'), findsOneWidget);
+    final button = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Summarizing…'),
+    );
+    expect(button.onPressed, isNull);
+    running = false;
+    await workflowActivity.refresh();
+  });
+
+  testWidgets('failed timeline jobs can be manually resubmitted', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'timeline') {
+            return <Object>[
+              <String, Object?>{
+                'id': 'segment-1',
+                'startedAt': 0,
+                'transcript': null,
+                'summary': null,
+                'transcriptionState': 'FAILED',
+                'summaryState': 'FAILED',
+                'transcriptionError': 'Server unavailable.',
+                'summaryError': 'Model unavailable.',
+              },
+            ];
+          }
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          calls.add(call.method);
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+    expect(find.text('Resubmit summary'), findsOneWidget);
+    await tester.tap(find.text('Resubmit summary'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transcript'));
+    await tester.pumpAndSettle();
+    expect(find.text('Resubmit transcription'), findsOneWidget);
+    await tester.tap(find.text('Resubmit transcription'));
+    await tester.pumpAndSettle();
+    expect(calls, containsAll(<String>['retrySummary', 'retryTranscription']));
+  });
+
+  testWidgets('topics keep recurring episodes as separate time ranges', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method != 'topics') return null;
+          return <Object>[
+            <String, Object>{
+              'id': 'top_1',
+              'title': 'Flutter authentication',
+              'description': 'Authentication architecture.',
+              'currentSummary': 'Current consolidated understanding.',
+              'firstSeen': 0,
+              'lastSeen': 3600000,
+              'episodes': <Object>[
+                <String, Object>{
+                  'id': 'ep_1',
+                  'startedAt': 0,
+                  'endedAt': 600000,
+                  'title': 'Controller state',
+                  'summary': '{"summary":"Moved state out of the widget."}',
+                  'status': 'provisional',
+                },
+                <String, Object>{
+                  'id': 'ep_2',
+                  'startedAt': 3000000,
+                  'endedAt': 3600000,
+                  'title': 'Submission handling',
+                  'summary': '{"summary":"Prevented duplicate submissions."}',
+                  'status': 'provisional',
+                },
+              ],
+            },
+          ];
+        });
+    await tester.pumpWidget(const MaterialApp(home: TopicsPage()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Flutter authentication'));
+    await tester.pumpAndSettle();
+    expect(find.text('Controller state'), findsOneWidget);
+    expect(find.text('Submission handling'), findsOneWidget);
+    expect(find.text('Moved state out of the widget.'), findsOneWidget);
+    expect(find.text('Prevented duplicate submissions.'), findsOneWidget);
+  });
+
+  testWidgets('bottom navigation exposes the three primary panels', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'status') {
+            return <String, Object>{'state': 'STOPPED'};
+          }
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          return <Object>[];
+        });
+    await tester.pumpWidget(const RecallWhisperApp());
+    await tester.pumpAndSettle();
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Recorder'), findsOneWidget);
+    expect(find.text('Transcripts'), findsOneWidget);
+    expect(find.text('Topics'), findsOneWidget);
+    await tester.tap(find.text('Transcripts'));
+    await tester.pumpAndSettle();
+    expect(find.text('Transcripts'), findsWidgets);
+  });
 }

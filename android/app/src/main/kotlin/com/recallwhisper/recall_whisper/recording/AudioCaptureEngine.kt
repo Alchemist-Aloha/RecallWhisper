@@ -149,7 +149,7 @@ class AudioCaptureEngine(
                     ),
                 )
                 onSegment(current.id, current.sampleCount * 1000 / SileroVad.SAMPLE_RATE)
-                UploadScheduler.enqueue(context)
+                ProcessingScheduler.enqueueTranscription(context)
             }
             if (!split) {
                 continuationGroup = null

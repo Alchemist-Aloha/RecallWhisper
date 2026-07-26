@@ -4,7 +4,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object DataExporter {
-    fun toJson(segments: List<CaptureSegment>, exportedAtMs: Long): String =
+    fun toJson(
+        segments: List<CaptureSegment>,
+        exportedAtMs: Long,
+        topics: List<Topic> = emptyList(),
+        episodes: List<TopicEpisode> = emptyList(),
+    ): String =
         JSONObject().apply {
             put("format", "RecallWhisper export")
             put("version", 1)
@@ -37,6 +42,28 @@ object DataExporter {
                     }
                 },
             )
+            put("topics", JSONArray(topics.map {
+                JSONObject()
+                    .put("topic_id", it.topicId)
+                    .put("canonical_title", it.canonicalTitle)
+                    .put("description", it.description)
+                    .put("current_summary", it.currentSummary)
+                    .put("topic_path", jsonValue(it.topicPathJson))
+                    .put("first_seen_utc_ms", it.firstSeenUtcMs)
+                    .put("last_seen_utc_ms", it.lastSeenUtcMs)
+            }))
+            put("topic_episodes", JSONArray(episodes.map {
+                JSONObject()
+                    .put("episode_id", it.episodeId)
+                    .put("topic_id", it.topicId)
+                    .put("started_at_utc_ms", it.startedAtUtcMs)
+                    .put("ended_at_utc_ms", it.endedAtUtcMs)
+                    .put("local_title", it.localTitle)
+                    .put("summary", jsonValue(it.summaryJson))
+                    .put("keywords", jsonValue(it.keywordsJson))
+                    .put("secondary_topics", jsonValue(it.secondaryTopicsJson))
+                    .put("segmentation_status", it.segmentationStatus)
+            }))
         }.toString(2)
 
     private fun jsonValue(value: String?): Any? {

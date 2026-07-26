@@ -5,6 +5,7 @@ import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
@@ -45,8 +46,46 @@ data class CaptureSegment(
     val rawTranscriptJson: String? = null,
     val summaryJson: String? = null,
     val processingError: String? = null,
+    val transcriptionState: String = "PENDING",
+    val summaryState: String = "WAITING",
+    val transcriptionError: String? = null,
+    val summaryError: String? = null,
     val createdAtMs: Long,
     val updatedAtMs: Long,
+)
+
+@Entity(tableName = "topic")
+data class Topic(
+    @PrimaryKey val topicId: String,
+    val canonicalTitle: String,
+    val description: String,
+    val currentSummary: String,
+    val topicPathJson: String,
+    val firstSeenUtcMs: Long,
+    val lastSeenUtcMs: Long,
+)
+
+@Entity(tableName = "topic_episode")
+data class TopicEpisode(
+    @PrimaryKey val episodeId: String,
+    val topicId: String,
+    val startedAtUtcMs: Long,
+    val endedAtUtcMs: Long,
+    val localTitle: String,
+    val summaryJson: String,
+    val keywordsJson: String,
+    val secondaryTopicsJson: String,
+    val segmentationStatus: String = "provisional",
+)
+
+@Entity(
+    tableName = "episode_segment",
+    primaryKeys = ["episodeId", "segmentId"],
+)
+data class EpisodeSegment(
+    val episodeId: String,
+    val segmentId: String,
+    val sequenceNumber: Int,
 )
 
 @Dao
@@ -60,29 +99,81 @@ interface SegmentDao {
     @Query("SELECT COALESCE(MAX(sequenceNumber), 0) + 1 FROM capture_segment")
     fun nextSequence(): Long
 
-    @Query("SELECT * FROM capture_segment WHERE uploadState IN ('LOCAL', 'QUEUED', 'RETRY_WAIT') ORDER BY sequenceNumber LIMIT :limit")
-    fun pending(limit: Int = 20): List<CaptureSegment>
+    @Query("""SELECT * FROM capture_segment
+        WHERE transcriptText IS NULL
+          AND transcriptionState IN ('PENDING', 'PROCESSING', 'RETRY_WAIT')
+        ORDER BY sequenceNumber LIMIT :limit""")
+    fun pendingTranscription(limit: Int = 20): List<CaptureSegment>
+
+    @Query("""SELECT capture_segment.* FROM capture_segment
+        LEFT JOIN episode_segment
+          ON episode_segment.segmentId = capture_segment.segmentId
+        WHERE capture_segment.transcriptText IS NOT NULL
+          AND episode_segment.segmentId IS NULL
+        ORDER BY capture_segment.sequenceNumber LIMIT :limit""")
+    fun pendingSummary(limit: Int = 200): List<CaptureSegment>
+
+    @Query("SELECT * FROM topic ORDER BY lastSeenUtcMs DESC LIMIT :limit")
+    fun recentTopics(limit: Int = 50): List<Topic>
+
+    @Query("SELECT * FROM topic_episode ORDER BY startedAtUtcMs DESC LIMIT :limit")
+    fun recentEpisodes(limit: Int = 200): List<TopicEpisode>
+
+    @Query("SELECT * FROM episode_segment ORDER BY episodeId, sequenceNumber")
+    fun episodeSegments(): List<EpisodeSegment>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun saveTopic(topic: Topic)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun saveEpisode(episode: TopicEpisode)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun saveEpisodeSegments(segments: List<EpisodeSegment>)
 
     @Query("SELECT * FROM capture_segment WHERE segmentId = :id")
     fun byId(id: String): CaptureSegment?
 
-    @Query("UPDATE capture_segment SET uploadState = :state, serverState = :serverState, updatedAtMs = :now WHERE segmentId = :id")
-    fun updateState(id: String, state: String, serverState: String, now: Long)
-
-    @Query("""UPDATE capture_segment SET uploadState = :state, serverState = :serverState,
-        transcriptText = :transcript, rawTranscriptJson = :rawTranscript,
-        summaryJson = :summary, processingError = :error, updatedAtMs = :now
-        WHERE segmentId = :id""")
-    fun updateProcessing(
+    @Query("""UPDATE capture_segment SET uploadState = :uploadState,
+        serverState = :serverState, transcriptText = :transcript,
+        rawTranscriptJson = :rawTranscript, processingError = :error,
+        transcriptionState = :state, transcriptionError = :error,
+        summaryState = CASE WHEN :state = 'COMPLETE' THEN 'PENDING' ELSE summaryState END,
+        updatedAtMs = :now WHERE segmentId = :id""")
+    fun updateTranscription(
         id: String,
         state: String,
+        uploadState: String,
         serverState: String,
         transcript: String?,
         rawTranscript: String?,
+        error: String?,
+        now: Long,
+    )
+
+    @Query("""UPDATE capture_segment SET serverState = :serverState,
+        summaryJson = :summary, processingError = :error,
+        summaryState = :state, summaryError = :error,
+        updatedAtMs = :now WHERE segmentId = :id""")
+    fun updateSummary(
+        id: String,
+        state: String,
+        serverState: String,
         summary: String?,
         error: String?,
         now: Long,
     )
+
+    @Query("""UPDATE capture_segment SET uploadState = 'PENDING',
+        serverState = 'QUEUED', processingError = NULL,
+        transcriptionState = 'PENDING', transcriptionError = NULL,
+        updatedAtMs = :now WHERE segmentId = :id AND transcriptText IS NULL""")
+    fun retryTranscription(id: String, now: Long): Int
+
+    @Query("""UPDATE capture_segment SET serverState = 'QUEUED',
+        processingError = NULL, summaryState = 'PENDING', summaryError = NULL,
+        updatedAtMs = :now WHERE segmentId = :id AND transcriptText IS NOT NULL""")
+    fun retrySummary(id: String, now: Long): Int
 
     @Query("""SELECT * FROM capture_segment
         WHERE transcriptText LIKE '%' || :query || '%'
@@ -97,7 +188,11 @@ interface SegmentDao {
     fun delete(id: String)
 }
 
-@Database(entities = [CaptureSegment::class], version = 3, exportSchema = false)
+@Database(
+    entities = [CaptureSegment::class, Topic::class, TopicEpisode::class, EpisodeSegment::class],
+    version = 5,
+    exportSchema = false,
+)
 abstract class RecorderDatabase : RoomDatabase() {
     abstract fun segments(): SegmentDao
 
@@ -109,7 +204,8 @@ abstract class RecorderDatabase : RoomDatabase() {
                 context.applicationContext,
                 RecorderDatabase::class.java,
                 "recorder.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .build().also { instance = it }
         }
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -128,6 +224,57 @@ abstract class RecorderDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE capture_segment ADD COLUMN rawTranscriptJson TEXT")
                 db.execSQL("ALTER TABLE capture_segment ADD COLUMN summaryJson TEXT")
                 db.execSQL("ALTER TABLE capture_segment ADD COLUMN processingError TEXT")
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE capture_segment ADD COLUMN transcriptionState TEXT NOT NULL DEFAULT 'PENDING'")
+                db.execSQL("ALTER TABLE capture_segment ADD COLUMN summaryState TEXT NOT NULL DEFAULT 'WAITING'")
+                db.execSQL("ALTER TABLE capture_segment ADD COLUMN transcriptionError TEXT")
+                db.execSQL("ALTER TABLE capture_segment ADD COLUMN summaryError TEXT")
+                db.execSQL("UPDATE capture_segment SET transcriptionState = 'COMPLETE' WHERE transcriptText IS NOT NULL")
+                db.execSQL("UPDATE capture_segment SET summaryState = 'PENDING' WHERE transcriptText IS NOT NULL")
+                db.execSQL("UPDATE capture_segment SET summaryState = 'COMPLETE' WHERE summaryJson IS NOT NULL")
+            }
+        }
+
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS `topic` (
+                        `topicId` TEXT NOT NULL,
+                        `canonicalTitle` TEXT NOT NULL,
+                        `description` TEXT NOT NULL,
+                        `currentSummary` TEXT NOT NULL,
+                        `topicPathJson` TEXT NOT NULL,
+                        `firstSeenUtcMs` INTEGER NOT NULL,
+                        `lastSeenUtcMs` INTEGER NOT NULL,
+                        PRIMARY KEY(`topicId`)
+                    )""",
+                )
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS `topic_episode` (
+                        `episodeId` TEXT NOT NULL,
+                        `topicId` TEXT NOT NULL,
+                        `startedAtUtcMs` INTEGER NOT NULL,
+                        `endedAtUtcMs` INTEGER NOT NULL,
+                        `localTitle` TEXT NOT NULL,
+                        `summaryJson` TEXT NOT NULL,
+                        `keywordsJson` TEXT NOT NULL,
+                        `secondaryTopicsJson` TEXT NOT NULL,
+                        `segmentationStatus` TEXT NOT NULL,
+                        PRIMARY KEY(`episodeId`)
+                    )""",
+                )
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS `episode_segment` (
+                        `episodeId` TEXT NOT NULL,
+                        `segmentId` TEXT NOT NULL,
+                        `sequenceNumber` INTEGER NOT NULL,
+                        PRIMARY KEY(`episodeId`, `segmentId`)
+                    )""",
+                )
             }
         }
     }

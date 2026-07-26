@@ -1,9 +1,45 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 const nativeCommands = MethodChannel('recall_whisper/recorder');
+final workflowActivity = WorkflowActivity();
+
+class WorkflowActivity
+    extends ValueNotifier<({bool transcribing, bool summarizing})> {
+  WorkflowActivity() : super((transcribing: false, summarizing: false));
+
+  Timer? _timer;
+
+  Future<void> refresh() async {
+    try {
+      final status = await nativeCommands.invokeMapMethod<Object?, Object?>(
+        'processingStatus',
+      );
+      value = (
+        transcribing: status?['transcribing'] == true,
+        summarizing: status?['summarizing'] == true,
+      );
+      _timer?.cancel();
+      if (value.transcribing || value.summarizing) {
+        _timer = Timer(const Duration(seconds: 1), refresh);
+      }
+    } on Object {
+      value = (transcribing: false, summarizing: false);
+    }
+  }
+
+  Future<void> run(String command) async {
+    value = (
+      transcribing: command == 'transcribeNow' || value.transcribing,
+      summarizing: command == 'summarizeNow' || value.summarizing,
+    );
+    await nativeCommands.invokeMethod(command);
+    await refresh();
+  }
+}
 
 void main() => runApp(const RecallWhisperApp());
 
@@ -23,9 +59,51 @@ class RecallWhisperApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xff101512),
         useMaterial3: true,
       ),
-      home: const RecorderPage(),
+      home: const MainShell(),
     );
   }
+}
+
+class MainShell extends StatefulWidget {
+  const MainShell({super.key});
+
+  @override
+  State<MainShell> createState() => _MainShellState();
+}
+
+class _MainShellState extends State<MainShell> {
+  int index = 0;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: switch (index) {
+      0 => const RecorderPage(),
+      1 => const TimelinePage(),
+      _ => const TopicsPage(),
+    },
+    bottomNavigationBar: NavigationBar(
+      selectedIndex: index,
+      onDestinationSelected: (value) => setState(() => index = value),
+      labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
+      destinations: const [
+        NavigationDestination(
+          icon: Icon(Icons.mic_none),
+          selectedIcon: Icon(Icons.mic),
+          label: 'Recorder',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.notes_outlined),
+          selectedIcon: Icon(Icons.notes),
+          label: 'Transcripts',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.topic_outlined),
+          selectedIcon: Icon(Icons.topic),
+          label: 'Topics',
+        ),
+      ],
+    ),
+  );
 }
 
 class RecorderPage extends StatefulWidget {
@@ -51,6 +129,7 @@ class _RecorderPageState extends State<RecorderPage>
     WidgetsBinding.instance.addObserver(this);
     _subscription = _events.receiveBroadcastStream().listen(_onEvent);
     _refresh();
+    workflowActivity.refresh();
   }
 
   @override
@@ -101,7 +180,11 @@ class _RecorderPageState extends State<RecorderPage>
   Future<void> _command(String command) async {
     setState(() => _error = null);
     try {
-      await nativeCommands.invokeMethod(command);
+      if (command == 'transcribeNow' || command == 'summarizeNow') {
+        await workflowActivity.run(command);
+      } else {
+        await nativeCommands.invokeMethod(command);
+      }
       await _refresh();
     } on PlatformException catch (error) {
       if (mounted) setState(() => _error = error.message);
@@ -192,20 +275,51 @@ class _RecorderPageState extends State<RecorderPage>
                 label: const Text('Stop'),
               ),
             const SizedBox(height: 28),
-            Row(
+            Text(
+              'Saved segments',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            Wrap(
+              alignment: WrapAlignment.end,
               children: [
-                Expanded(
-                  child: Text(
-                    'Saved segments',
-                    style: Theme.of(context).textTheme.titleLarge,
+                ValueListenableBuilder(
+                  valueListenable: workflowActivity,
+                  builder: (context, activity, _) => Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextButton.icon(
+                        onPressed: activity.transcribing
+                            ? null
+                            : () => _command('transcribeNow'),
+                        icon: activity.transcribing
+                            ? const _WorkingIndicator()
+                            : const Icon(Icons.graphic_eq),
+                        label: Text(
+                          activity.transcribing
+                              ? 'Transcribing…'
+                              : 'Transcribe',
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: activity.summarizing
+                            ? null
+                            : () => _command('summarizeNow'),
+                        icon: activity.summarizing
+                            ? const _WorkingIndicator()
+                            : const Icon(Icons.summarize_outlined),
+                        label: Text(
+                          activity.summarizing ? 'Summarizing…' : 'Summarize',
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                TextButton.icon(
-                  onPressed: () => _command('sync'),
-                  icon: const Icon(Icons.sync),
-                  label: const Text('Process now'),
-                ),
               ],
+            ),
+            ValueListenableBuilder(
+              valueListenable: workflowActivity,
+              builder: (context, activity, _) =>
+                  _WorkflowBanner(activity: activity),
             ),
             const SizedBox(height: 8),
             if (_segments.isEmpty)
@@ -279,6 +393,575 @@ class _RecorderPageState extends State<RecorderPage>
 
   String _formatDuration(int milliseconds) =>
       '${(milliseconds / 1000).toStringAsFixed(1)} seconds';
+}
+
+class _WorkingIndicator extends SizedBox {
+  const _WorkingIndicator()
+    : super(
+        width: 18,
+        height: 18,
+        child: const CircularProgressIndicator(strokeWidth: 2),
+      );
+}
+
+class _WorkflowBanner extends StatelessWidget {
+  const _WorkflowBanner({required this.activity});
+
+  final ({bool transcribing, bool summarizing}) activity;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!activity.transcribing && !activity.summarizing) {
+      return const SizedBox.shrink();
+    }
+    final label = activity.transcribing && activity.summarizing
+        ? 'Transcription and summary are running'
+        : activity.transcribing
+        ? 'Transcription is running'
+        : 'Summary is running';
+    return Semantics(
+      liveRegion: true,
+      label: label,
+      child: Card(
+        color: Theme.of(context).colorScheme.primaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              const _WorkingIndicator(),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '$label…',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class TimelinePage extends StatefulWidget {
+  const TimelinePage({super.key});
+
+  @override
+  State<TimelinePage> createState() => _TimelinePageState();
+}
+
+class _TimelinePageState extends State<TimelinePage> {
+  List<Map<Object?, Object?>> items = const [];
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    refresh();
+  }
+
+  Future<void> refresh() async {
+    try {
+      final values = await nativeCommands.invokeListMethod<Object?>('timeline');
+      if (!mounted) return;
+      setState(() {
+        items = (values ?? const [])
+            .map((value) => Map<Object?, Object?>.from(value! as Map))
+            .toList();
+        error = null;
+      });
+    } on PlatformException catch (exception) {
+      if (mounted) setState(() => error = exception.message);
+    }
+  }
+
+  Future<void> run(String command) async {
+    try {
+      await workflowActivity.run(command);
+      await refresh();
+    } on PlatformException catch (exception) {
+      if (mounted) setState(() => error = exception.message);
+    }
+  }
+
+  Future<void> retry(String command, String id) async {
+    try {
+      await nativeCommands.invokeMethod(command, {'id': id});
+      await workflowActivity.refresh();
+      await refresh();
+    } on PlatformException catch (exception) {
+      if (mounted) setState(() => error = exception.message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Transcripts'),
+      actions: [
+        IconButton(
+          tooltip: 'Search recall',
+          onPressed: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
+          icon: const Icon(Icons.search),
+        ),
+        IconButton(
+          tooltip: 'Settings',
+          onPressed: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const SettingsPage())),
+          icon: const Icon(Icons.settings),
+        ),
+        IconButton(
+          tooltip: 'Refresh',
+          onPressed: refresh,
+          icon: const Icon(Icons.refresh),
+        ),
+      ],
+    ),
+    body: RefreshIndicator(
+      onRefresh: refresh,
+      child: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          ValueListenableBuilder(
+            valueListenable: workflowActivity,
+            builder: (context, activity, _) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _WorkflowBanner(activity: activity),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: activity.transcribing
+                          ? null
+                          : () => run('transcribeNow'),
+                      icon: activity.transcribing
+                          ? const _WorkingIndicator()
+                          : const Icon(Icons.graphic_eq),
+                      label: Text(
+                        activity.transcribing
+                            ? 'Transcribing…'
+                            : 'Transcribe pending',
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: activity.summarizing
+                          ? null
+                          : () => run('summarizeNow'),
+                      icon: activity.summarizing
+                          ? const _WorkingIndicator()
+                          : const Icon(Icons.summarize_outlined),
+                      label: Text(
+                        activity.summarizing
+                            ? 'Summarizing…'
+                            : 'Summarize pending',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                error!,
+                style: const TextStyle(color: Colors.redAccent),
+              ),
+            ),
+          const SizedBox(height: 12),
+          if (items.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: Text('No transcripts or summaries yet.'),
+              ),
+            ),
+          for (var index = 0; index < items.length; index++)
+            _TimelineEntry(
+              last: index == items.length - 1,
+              child: _TranscriptSummaryCard(
+                item: items[index],
+                time: _time,
+                retryTranscription: (id) => retry('retryTranscription', id),
+                retrySummary: () =>
+                    retry('retrySummary', items[index]['id']! as String),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  String _time(int milliseconds) {
+    final value = DateTime.fromMillisecondsSinceEpoch(milliseconds).toLocal();
+    return '${value.year}-${value.month.toString().padLeft(2, '0')}-'
+        '${value.day.toString().padLeft(2, '0')} '
+        '${value.hour.toString().padLeft(2, '0')}:'
+        '${value.minute.toString().padLeft(2, '0')}:'
+        '${value.second.toString().padLeft(2, '0')}';
+  }
+}
+
+class _TimelineEntry extends StatelessWidget {
+  const _TimelineEntry({required this.child, required this.last});
+
+  final Widget child;
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) => Stack(
+    children: [
+      Positioned(
+        left: 8,
+        top: 18,
+        bottom: last ? null : 0,
+        height: last ? 2 : null,
+        child: Container(
+          width: 2,
+          color: Theme.of(context).colorScheme.outlineVariant,
+        ),
+      ),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 18,
+            height: 18,
+            margin: const EdgeInsets.only(top: 18),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primary,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                width: 4,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: child,
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
+class _TranscriptSummaryCard extends StatelessWidget {
+  const _TranscriptSummaryCard({
+    required this.item,
+    required this.time,
+    required this.retryTranscription,
+    required this.retrySummary,
+  });
+
+  final Map<Object?, Object?> item;
+  final String Function(int) time;
+  final ValueChanged<String> retryTranscription;
+  final VoidCallback retrySummary;
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = _summaryMap(item['summary'] as String?);
+    final title =
+        _string(summary?['local_title']) ??
+        _string(summary?['title']) ??
+        'Recording summary';
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.auto_awesome_outlined),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        time(item['startedAt']! as int),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      _StateChip(
+                        label: item['summaryState'] as String? ?? 'WAITING',
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _SummaryContent(value: item['summary'] as String?, parsed: summary),
+            if (item['summaryError'] case final String message)
+              _ErrorText(message: message),
+            if (_retryable(item['summaryState']))
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: retrySummary,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Resubmit summary'),
+                ),
+              ),
+            const Divider(height: 28),
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(bottom: 8),
+              leading: const Icon(Icons.format_quote),
+              title: const Text('Transcript'),
+              subtitle: Text(
+                _segments.length == 1
+                    ? '1 segment'
+                    : '${_segments.length} segments',
+              ),
+              children: [
+                for (final segment in _segments)
+                  _TranscriptSegment(
+                    segment: segment,
+                    time: time,
+                    retry: () => retryTranscription(segment['id']! as String),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Map<String, dynamic>? _summaryMap(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    try {
+      return jsonDecode(value) as Map<String, dynamic>;
+    } on Object {
+      return null;
+    }
+  }
+
+  String? _string(Object? value) {
+    final text = value?.toString().trim();
+    return text == null || text.isEmpty || text == 'null' ? null : text;
+  }
+
+  bool _retryable(Object? state) => state == 'FAILED' || state == 'RETRY_WAIT';
+
+  List<Map<Object?, Object?>> get _segments {
+    final values = item['segments'];
+    if (values is List) {
+      return values
+          .map((value) => Map<Object?, Object?>.from(value! as Map))
+          .toList();
+    }
+    return [item];
+  }
+}
+
+class _TranscriptSegment extends StatelessWidget {
+  const _TranscriptSegment({
+    required this.segment,
+    required this.time,
+    required this.retry,
+  });
+
+  final Map<Object?, Object?> segment;
+  final String Function(int) time;
+  final VoidCallback retry;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          time(segment['startedAt']! as int),
+          style: Theme.of(context).textTheme.labelMedium,
+        ),
+        const SizedBox(height: 6),
+        SelectableText(
+          segment['transcript'] as String? ?? 'No transcript yet.',
+        ),
+        if (segment['transcriptionError'] case final String message)
+          _ErrorText(message: message),
+        if (segment['transcriptionState'] == 'FAILED' ||
+            segment['transcriptionState'] == 'RETRY_WAIT')
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: retry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Resubmit transcription'),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+class _SummaryContent extends StatelessWidget {
+  const _SummaryContent({required this.value, required this.parsed});
+
+  final String? value;
+  final Map<String, dynamic>? parsed;
+
+  @override
+  Widget build(BuildContext context) {
+    if (value == null || value!.trim().isEmpty) {
+      return const Text('No summary yet.');
+    }
+    if (parsed == null) return SelectableText(value!);
+    final summary = _text(parsed!['summary']);
+    final tags = <String>{
+      ..._strings(parsed!['keywords']),
+      ..._strings(parsed!['secondary_topics']),
+      ..._strings(parsed!['topics']),
+    }.take(8).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (summary != null)
+          SelectableText(
+            summary,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyLarge?.copyWith(height: 1.45),
+          ),
+        if (tags.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [for (final tag in tags) Chip(label: Text(tag))],
+          ),
+        ],
+        _SummaryList(
+          title: 'Decisions',
+          values: _strings(parsed!['decisions']),
+        ),
+        _SummaryList(
+          title: 'Action items',
+          values: _strings(parsed!['action_items']),
+        ),
+        _SummaryList(
+          title: 'Questions',
+          values: _strings(parsed!['questions']),
+        ),
+        _SummaryList(
+          title: 'Uncertainties',
+          values: _strings(parsed!['uncertainties']),
+        ),
+      ],
+    );
+  }
+
+  String? _text(Object? value) {
+    final text = value?.toString().trim();
+    return text == null || text.isEmpty || text == 'null' ? null : text;
+  }
+
+  List<String> _strings(Object? value) {
+    if (value is! List) return const [];
+    return value
+        .map((item) {
+          if (item is Map) {
+            return item['text']?.toString() ??
+                item['task']?.toString() ??
+                item['description']?.toString() ??
+                item.toString();
+          }
+          return item.toString();
+        })
+        .where((item) => item.trim().isNotEmpty)
+        .toList();
+  }
+}
+
+class _SummaryList extends StatelessWidget {
+  const _SummaryList({required this.title, required this.values});
+
+  final String title;
+  final List<String> values;
+
+  @override
+  Widget build(BuildContext context) {
+    if (values.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          for (final value in values)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 5),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('•  '),
+                  Expanded(child: Text(value)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StateChip extends StatelessWidget {
+  const _StateChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Chip(
+    avatar: Icon(
+      label == 'COMPLETE' ? Icons.check_circle_outline : Icons.schedule,
+      size: 17,
+    ),
+    label: Text(label.toLowerCase()),
+    visualDensity: VisualDensity.compact,
+  );
+}
+
+class _ErrorText extends StatelessWidget {
+  const _ErrorText({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 10),
+    child: Text(message, style: const TextStyle(color: Colors.redAccent)),
+  );
 }
 
 class SearchPage extends StatefulWidget {
@@ -355,6 +1038,172 @@ class _SearchPageState extends State<SearchPage> {
   );
 }
 
+class TopicsPage extends StatefulWidget {
+  const TopicsPage({super.key});
+
+  @override
+  State<TopicsPage> createState() => _TopicsPageState();
+}
+
+class _TopicsPageState extends State<TopicsPage> {
+  List<Map<Object?, Object?>> topics = const [];
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    refresh();
+  }
+
+  Future<void> refresh() async {
+    try {
+      final values = await nativeCommands.invokeListMethod<Object?>('topics');
+      if (!mounted) return;
+      setState(() {
+        topics = (values ?? const [])
+            .map((value) => Map<Object?, Object?>.from(value! as Map))
+            .toList();
+        error = null;
+      });
+    } on PlatformException catch (exception) {
+      if (mounted) setState(() => error = exception.message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Topics'),
+      actions: [
+        IconButton(
+          tooltip: 'Search recall',
+          onPressed: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
+          icon: const Icon(Icons.search),
+        ),
+        IconButton(
+          tooltip: 'Settings',
+          onPressed: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const SettingsPage())),
+          icon: const Icon(Icons.settings),
+        ),
+        IconButton(
+          tooltip: 'Refresh',
+          onPressed: refresh,
+          icon: const Icon(Icons.refresh),
+        ),
+      ],
+    ),
+    body: RefreshIndicator(
+      onRefresh: refresh,
+      child: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          const Text(
+            'Recurring subjects are grouped here while every separate occurrence keeps its own time range.',
+          ),
+          if (error != null)
+            Text(error!, style: const TextStyle(color: Colors.redAccent)),
+          const SizedBox(height: 12),
+          if (topics.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: Text(
+                  'No topics yet. Transcribe recordings, then run Summarize.',
+                ),
+              ),
+            ),
+          for (final topic in topics)
+            Card(
+              child: ExpansionTile(
+                leading: const Icon(Icons.topic_outlined),
+                title: Text(topic['title'] as String),
+                subtitle: Text(
+                  '${_formatTopicTime(topic['firstSeen'] as int)} – '
+                  '${_formatTopicTime(topic['lastSeen'] as int)}',
+                ),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(topic['description'] as String),
+                  const SizedBox(height: 8),
+                  Text(
+                    topic['currentSummary'] as String,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const Divider(height: 24),
+                  for (final rawEpisode
+                      in (topic['episodes'] as List<Object?>? ?? const []))
+                    _EpisodeTile(
+                      episode: Map<Object?, Object?>.from(rawEpisode! as Map),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  String _formatTopicTime(int milliseconds) {
+    final value = DateTime.fromMillisecondsSinceEpoch(milliseconds).toLocal();
+    return '${value.month}/${value.day} '
+        '${value.hour.toString().padLeft(2, '0')}:'
+        '${value.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+class _EpisodeTile extends StatelessWidget {
+  const _EpisodeTile({required this.episode});
+
+  final Map<Object?, Object?> episode;
+
+  @override
+  Widget build(BuildContext context) {
+    final start = DateTime.fromMillisecondsSinceEpoch(
+      episode['startedAt'] as int,
+    ).toLocal();
+    final end = DateTime.fromMillisecondsSinceEpoch(
+      episode['endedAt'] as int,
+    ).toLocal();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            episode['title'] as String,
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          Text(
+            '${start.year}-${start.month.toString().padLeft(2, '0')}-'
+            '${start.day.toString().padLeft(2, '0')} '
+            '${start.hour.toString().padLeft(2, '0')}:'
+            '${start.minute.toString().padLeft(2, '0')}–'
+            '${end.hour.toString().padLeft(2, '0')}:'
+            '${end.minute.toString().padLeft(2, '0')} · '
+            '${episode['status']}',
+            style: Theme.of(context).textTheme.labelMedium,
+          ),
+          const SizedBox(height: 4),
+          SelectableText(_episodeSummary(episode['summary'] as String)),
+        ],
+      ),
+    );
+  }
+
+  String _episodeSummary(String value) {
+    try {
+      return (jsonDecode(value) as Map<String, dynamic>)['summary'] as String;
+    } on Object {
+      return value;
+    }
+  }
+}
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -369,9 +1218,12 @@ class _SettingsPageState extends State<SettingsPage> {
   final summarizationUrl = TextEditingController();
   final summarizationToken = TextEditingController();
   final summarizationModel = TextEditingController();
+  final summaryLanguage = TextEditingController();
   bool cellular = false;
   bool allowHttp = false;
   int trailingSilenceMs = 30000;
+  int episodeGapMinutes = 5;
+  int episodeMaxMinutes = 30;
   bool loaded = false;
 
   @override
@@ -391,12 +1243,18 @@ class _SettingsPageState extends State<SettingsPage> {
     summarizationUrl.text = config?['summarizationUrl'] as String? ?? '';
     summarizationToken.text = config?['summarizationToken'] as String? ?? '';
     summarizationModel.text = config?['summarizationModel'] as String? ?? '';
+    summaryLanguage.text =
+        config?['summaryLanguage'] as String? ?? 'Same as transcript';
     if (mounted) {
       setState(() {
         cellular = config?['cellular'] as bool? ?? false;
         allowHttp = config?['allowHttp'] as bool? ?? false;
         trailingSilenceMs =
             config?['trailingSilenceMs'] as int? ?? trailingSilenceMs;
+        episodeGapMinutes =
+            config?['episodeGapMinutes'] as int? ?? episodeGapMinutes;
+        episodeMaxMinutes =
+            config?['episodeMaxMinutes'] as int? ?? episodeMaxMinutes;
         loaded = true;
       });
     }
@@ -413,6 +1271,9 @@ class _SettingsPageState extends State<SettingsPage> {
       'summarizationUrl': summarizationUrl.text.trim(),
       'summarizationToken': summarizationToken.text,
       'summarizationModel': summarizationModel.text.trim(),
+      'summaryLanguage': summaryLanguage.text.trim(),
+      'episodeGapMinutes': episodeGapMinutes,
+      'episodeMaxMinutes': episodeMaxMinutes,
     });
     await nativeCommands.invokeMethod('sync');
     if (mounted) {
@@ -430,6 +1291,7 @@ class _SettingsPageState extends State<SettingsPage> {
     summarizationUrl.dispose();
     summarizationToken.dispose();
     summarizationModel.dispose();
+    summaryLanguage.dispose();
     super.dispose();
   }
 
@@ -514,6 +1376,50 @@ class _SettingsPageState extends State<SettingsPage> {
                   labelText: 'Summarization model',
                   hintText: 'qwen3:8b',
                 ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: summaryLanguage,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Summary language',
+                  hintText: 'Same as transcript, English, Simplified Chinese…',
+                  helperText:
+                      'Used for titles, summaries, decisions, and actions',
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Topic episodes',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('New episode after inactivity'),
+                subtitle: Text('$episodeGapMinutes minutes between recordings'),
+              ),
+              Slider(
+                min: 3,
+                max: 10,
+                divisions: 7,
+                value: episodeGapMinutes.toDouble(),
+                label: '$episodeGapMinutes min',
+                onChanged: (value) =>
+                    setState(() => episodeGapMinutes = value.round()),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Maximum episode length'),
+                subtitle: Text('$episodeMaxMinutes minutes'),
+              ),
+              Slider(
+                min: 10,
+                max: 60,
+                divisions: 10,
+                value: episodeMaxMinutes.toDouble(),
+                label: '$episodeMaxMinutes min',
+                onChanged: (value) =>
+                    setState(() => episodeMaxMinutes = value.round()),
               ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,

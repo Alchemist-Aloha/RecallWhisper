@@ -13,7 +13,7 @@ import com.recallwhisper.recall_whisper.recording.EncryptionManager
 import com.recallwhisper.recall_whisper.recording.PlaybackManager
 import com.recallwhisper.recall_whisper.recording.DirectApiClient
 import com.recallwhisper.recall_whisper.recording.DataExporter
-import com.recallwhisper.recall_whisper.recording.UploadScheduler
+import com.recallwhisper.recall_whisper.recording.ProcessingScheduler
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -65,6 +65,18 @@ class MainActivity : FlutterActivity() {
                                 "summarization_model",
                                 "",
                             ),
+                            "summaryLanguage" to values.getString(
+                                "summary_language",
+                                "Same as transcript",
+                            ),
+                            "episodeGapMinutes" to values.getInt(
+                                "episode_gap_minutes",
+                                5,
+                            ),
+                            "episodeMaxMinutes" to values.getInt(
+                                "episode_max_minutes",
+                                30,
+                            ),
                         ),
                     )
                 }
@@ -107,12 +119,87 @@ class MainActivity : FlutterActivity() {
                             "summarization_model",
                             values["summarizationModel"] as String,
                         )
+                        .putString(
+                            "summary_language",
+                            values["summaryLanguage"] as String,
+                        )
+                        .putInt(
+                            "episode_gap_minutes",
+                            values["episodeGapMinutes"] as Int,
+                        )
+                        .putInt(
+                            "episode_max_minutes",
+                            values["episodeMaxMinutes"] as Int,
+                        )
                         .apply()
                     result.success(null)
                 }
                 "sync" -> {
-                    UploadScheduler.enqueue(this, immediate = true)
+                    ProcessingScheduler.enqueueTranscription(this, immediate = true)
+                    ProcessingScheduler.enqueueSummary(this, immediate = true)
                     result.success(null)
+                }
+                "transcribeNow" -> {
+                    enqueueOrError(
+                        ProcessingScheduler.enqueueTranscription(this, immediate = true),
+                        "transcription",
+                        result,
+                    )
+                }
+                "summarizeNow" -> {
+                    enqueueOrError(
+                        ProcessingScheduler.enqueueSummary(this, immediate = true),
+                        "summarization",
+                        result,
+                    )
+                }
+                "retryTranscription", "retrySummary" -> databaseExecutor.execute {
+                    val id = call.argument<String>("id")!!
+                    val dao = RecorderDatabase.get(this).segments()
+                    val summary = call.method == "retrySummary"
+                    val reset = if (summary) {
+                        dao.retrySummary(id, System.currentTimeMillis())
+                    } else {
+                        dao.retryTranscription(id, System.currentTimeMillis())
+                    }
+                    val queued = reset > 0 && if (summary) {
+                        ProcessingScheduler.enqueueSummary(
+                            this,
+                            immediate = true,
+                            resubmitted = true,
+                        )
+                    } else {
+                        ProcessingScheduler.enqueueTranscription(
+                            this,
+                            immediate = true,
+                            resubmitted = true,
+                        )
+                    }
+                    runOnUiThread {
+                        if (queued) result.success(null) else result.error(
+                            "resubmit_failed",
+                            "Could not resubmit this ${if (summary) "summary" else "transcription"}. Check its state and settings.",
+                            null,
+                        )
+                    }
+                }
+                "processingStatus" -> databaseExecutor.execute {
+                    val manager = androidx.work.WorkManager.getInstance(this)
+                    val active: (String) -> Boolean = { name ->
+                        manager.getWorkInfosForUniqueWork(name).get().any {
+                            !it.state.isFinished
+                        }
+                    }
+                    val transcribing = active("segment_transcription")
+                    val summarizing = active("segment_summarization")
+                    runOnUiThread {
+                        result.success(
+                            mapOf(
+                                "transcribing" to transcribing,
+                                "summarizing" to summarizing,
+                            ),
+                        )
+                    }
                 }
                 "search" -> databaseExecutor.execute {
                     val values = RecorderDatabase.get(this).segments()
@@ -203,6 +290,79 @@ class MainActivity : FlutterActivity() {
                             "transcript" to it.transcriptText,
                             "summary" to it.summaryJson,
                             "processingError" to it.processingError,
+                            "transcriptionState" to it.transcriptionState,
+                            "summaryState" to it.summaryState,
+                            "transcriptionError" to it.transcriptionError,
+                            "summaryError" to it.summaryError,
+                        )
+                    }
+                    runOnUiThread { result.success(values) }
+                }
+                "timeline" -> databaseExecutor.execute {
+                    val dao = RecorderDatabase.get(this).segments()
+                    val segments = dao.recent()
+                    val segmentsById = segments.associateBy { it.segmentId }
+                    val links = dao.episodeSegments().groupBy { it.episodeId }
+                    val linkedIds = links.values.flatten().mapTo(mutableSetOf()) { it.segmentId }
+                    val episodes = dao.recentEpisodes().map { episode ->
+                        mapOf(
+                            "id" to episode.episodeId,
+                            "startedAt" to episode.startedAtUtcMs,
+                            "endedAt" to episode.endedAtUtcMs,
+                            "summary" to episode.summaryJson,
+                            "summaryState" to "COMPLETE",
+                            "segments" to links[episode.episodeId].orEmpty().mapNotNull {
+                                segmentsById[it.segmentId]
+                            }.map(::timelineSegment),
+                        )
+                    }
+                    val pending = segments.filterNot { it.segmentId in linkedIds }.map {
+                        mapOf(
+                            "id" to it.segmentId,
+                            "startedAt" to it.startedAtUtcMs,
+                            "endedAt" to it.endedAtUtcMs,
+                            "summary" to it.summaryJson,
+                            "summaryState" to it.summaryState,
+                            "summaryError" to it.summaryError,
+                            "segments" to listOf(timelineSegment(it)),
+                        )
+                    }
+                    val values = (episodes + pending).sortedByDescending {
+                        it["startedAt"] as Long
+                    }
+                    runOnUiThread { result.success(values) }
+                }
+                "topics" -> databaseExecutor.execute {
+                    val dao = RecorderDatabase.get(this).segments()
+                    val episodes = dao.recentEpisodes().groupBy { it.topicId }
+                    val values = dao.recentTopics().map { topic ->
+                        val topicEpisodes = episodes[topic.topicId] ?: emptyList()
+                        mapOf(
+                            "id" to topic.topicId,
+                            "title" to topic.canonicalTitle.takeUnless {
+                                it.isBlank() || it == "null"
+                            }.orEmpty().ifBlank {
+                                topicEpisodes.firstOrNull()?.localTitle
+                                    ?.takeUnless { it.isBlank() || it == "null" }
+                                    ?: "Topic episode"
+                            },
+                            "description" to topic.description,
+                            "currentSummary" to topic.currentSummary,
+                            "topicPath" to topic.topicPathJson,
+                            "firstSeen" to topic.firstSeenUtcMs,
+                            "lastSeen" to topic.lastSeenUtcMs,
+                            "episodes" to topicEpisodes.map {
+                                mapOf(
+                                    "id" to it.episodeId,
+                                    "startedAt" to it.startedAtUtcMs,
+                                    "endedAt" to it.endedAtUtcMs,
+                                    "title" to it.localTitle,
+                                    "summary" to it.summaryJson,
+                                    "keywords" to it.keywordsJson,
+                                    "secondaryTopics" to it.secondaryTopicsJson,
+                                    "status" to it.segmentationStatus,
+                                )
+                            },
                         )
                     }
                     runOnUiThread { result.success(values) }
@@ -224,6 +384,25 @@ class MainActivity : FlutterActivity() {
             }
         })
     }
+
+    private fun enqueueOrError(queued: Boolean, workflow: String, result: MethodChannel.Result) {
+        if (queued) result.success(null) else result.error(
+            "missing_config",
+            "Configure the $workflow server first.",
+            null,
+        )
+    }
+
+    private fun timelineSegment(
+        segment: com.recallwhisper.recall_whisper.recording.CaptureSegment,
+    ) = mapOf(
+        "id" to segment.segmentId,
+        "startedAt" to segment.startedAtUtcMs,
+        "endedAt" to segment.endedAtUtcMs,
+        "transcript" to segment.transcriptText,
+        "transcriptionState" to segment.transcriptionState,
+        "transcriptionError" to segment.transcriptionError,
+    )
 
     private fun startRecorder(result: MethodChannel.Result) {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
@@ -249,8 +428,13 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun exportJson(): String {
-        val segments = RecorderDatabase.get(this).segments().all()
-        return DataExporter.toJson(segments, System.currentTimeMillis())
+        val dao = RecorderDatabase.get(this).segments()
+        return DataExporter.toJson(
+            dao.all(),
+            System.currentTimeMillis(),
+            dao.recentTopics(Int.MAX_VALUE),
+            dao.recentEpisodes(Int.MAX_VALUE),
+        )
     }
 
     override fun onRequestPermissionsResult(
