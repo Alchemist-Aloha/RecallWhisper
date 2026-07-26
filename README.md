@@ -1,36 +1,44 @@
 # RecallWhisper
 
-Android ambient speech capture built with Flutter and a native Kotlin foreground
-service. This repository currently implements specification Phase 1 only:
+Private Android ambient capture with all durable data stored on the phone.
+There is no RecallWhisper backend service.
 
-- 16 kHz mono PCM16 `AudioRecord` capture
-- bundled Silero VAD v6.2 through ONNX Runtime
-- 1.5-second pre-roll, hysteresis, 1.8-second silence timeout
-- 180-second WAV segments with 1-second continuation overlap
-- atomic finalization, SHA-256, dual wall/monotonic timestamps
-- Room segment metadata and a Flutter segment browser
-- explicit start, pause, resume, and stop controls
+## Data flow
 
-Audio never leaves the phone in this phase. WAV files are private app data and
-are not yet encrypted, uploaded, transcribed, or summarized.
-
-## Run
-
-```sh
-flutter run
+```text
+Microphone → encrypted local WAV → transcription API
+           → local raw transcript → summarization API
+           → local summary/search/export
 ```
 
-Android 7.0 (API 24) or later is required. Start recording while the app is
-visible and grant microphone permission. Android keeps a permanent notification
-while the microphone service is active.
+- Native Kotlin foreground service and Quick Settings tile
+- Silero VAD with configurable 5–60 second conversation pause tolerance
+- Per-file AES-256-GCM keys wrapped by Android Keystore
+- Room metadata, raw transcription responses, transcripts, and summaries
+- Direct OpenAI-compatible transcription and summarization endpoints
+- Wi-Fi-only processing by default; cellular is opt-in
+- Local playback, transcript search, deletion, API playground, and JSON export
 
-## Validate
+## Configure
+
+In Settings, configure the transcription and summarization URL, token, and
+model separately. HTTPS is required unless “Allow insecure HTTP” is explicitly
+enabled for a trusted development network.
+
+Settings → Debug and API playground can list summarization models, edit the
+local system prompt, send arbitrary text, tune generation parameters, and
+inspect response latency and errors. It also includes an authenticated
+transcription-server health and model-discovery check.
+
+“Export all data as JSON” opens Android’s document picker and writes segment
+metadata, raw transcription results, transcripts, summaries, processing state,
+and checksums to a user-selected file. Audio remains separately encrypted in
+private app storage.
+
+## Build
 
 ```sh
 flutter analyze
 flutter test
 ./android/gradlew -p android testDebugUnitTest assembleDebug
 ```
-
-The next milestone should begin only after the native recorder passes the
-specified eight-hour screen-off test on physical hardware.

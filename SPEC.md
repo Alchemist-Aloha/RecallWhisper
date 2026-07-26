@@ -1,5 +1,12 @@
 # Personal Ambient Recorder and Recall System
 
+> **Implementation amendment (2026-07-25):** The user removed the
+> RecallWhisper server. The Android app is now the authoritative store and calls
+> separately configured OpenAI-compatible transcription and summarization APIs
+> directly. Audio, raw API output, transcripts, summaries, search data, and
+> export metadata remain on the phone. Server-specific sections below describe
+> the original baseline and are superseded by this amendment.
+
 **Specification version:** 1.0  
 **Target platform:** Android application built with Flutter and a native Kotlin recording engine  
 **Processing model:** Self-hosted dedicated ASR plus an OpenAI-compatible text LLM  

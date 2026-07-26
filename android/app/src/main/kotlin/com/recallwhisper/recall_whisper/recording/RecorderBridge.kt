@@ -21,7 +21,10 @@ object RecorderBridge {
     fun error(code: String, message: String) =
         emit(mapOf("type" to "error", "code" to code, "message" to message))
 
-    private fun emit(event: Map<String, Any>) {
+    fun playback(segmentId: String?) =
+        emit(mapOf("type" to "playback", "segmentId" to segmentId))
+
+    private fun emit(event: Map<String, Any?>) {
         main.post { sink?.success(event) }
     }
 }

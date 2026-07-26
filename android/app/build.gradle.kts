@@ -38,8 +38,10 @@ android {
 dependencies {
     implementation("androidx.room:room-runtime:2.8.4")
     kapt("androidx.room:room-compiler:2.8.4")
+    implementation("androidx.work:work-runtime:2.11.1")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.27.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
 
 kapt {

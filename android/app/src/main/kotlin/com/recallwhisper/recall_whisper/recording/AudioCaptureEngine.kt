@@ -72,6 +72,10 @@ class AudioCaptureEngine(
         val ring = ShortRingBuffer(PRE_ROLL_SAMPLES)
         val overlap = ShortRingBuffer(OVERLAP_SAMPLES)
         val history = ArrayDeque<Boolean>(DECISION_FRAMES)
+        val trailingSilenceMs = context.getSharedPreferences(
+            "recall_whisper",
+            Context.MODE_PRIVATE,
+        ).getInt("conversation_pause_ms_v2", TRAILING_SILENCE_MS)
         val readBuffer = ShortArray(4096)
         val frame = ShortArray(SileroVad.FRAME_SAMPLES)
         var frameSize = 0
@@ -103,7 +107,8 @@ class AudioCaptureEngine(
             if (!valid) {
                 current.abort()
             } else {
-                val file = current.finish()
+                val plainFile = current.finish()
+                val encrypted = EncryptionManager().encrypt(plainFile, current.id)
                 val endedWall = startedWallMs + current.sampleCount * 1000 / SileroVad.SAMPLE_RATE
                 val endedElapsed = startedElapsedNs +
                     current.sampleCount * 1_000_000_000 / SileroVad.SAMPLE_RATE
@@ -126,9 +131,14 @@ class AudioCaptureEngine(
                         timezoneName = zone.id,
                         utcOffsetMinutes = zone.rules.getOffset(Instant.ofEpochMilli(startedWallMs))
                             .totalSeconds / 60,
-                        filePath = file.absolutePath,
-                        fileSizeBytes = file.length(),
-                        sha256 = WavFile.sha256(file),
+                        filePath = encrypted.file.absolutePath,
+                        fileSizeBytes = encrypted.file.length(),
+                        sha256 = encrypted.sha256Ciphertext,
+                        sha256Plaintext = encrypted.sha256Plaintext,
+                        encryptionVersion = 1,
+                        wrappedKey = encrypted.wrappedKey,
+                        wrapNonce = encrypted.wrapNonce,
+                        fileNonce = encrypted.fileNonce,
                         sampleCount = current.sampleCount,
                         durationMs = current.sampleCount * 1000 / SileroVad.SAMPLE_RATE,
                         continuationGroupId = continuationGroup.takeIf { continuationIndex > 0 || split },
@@ -139,6 +149,7 @@ class AudioCaptureEngine(
                     ),
                 )
                 onSegment(current.id, current.sampleCount * 1000 / SileroVad.SAMPLE_RATE)
+                UploadScheduler.enqueue(context)
             }
             if (!split) {
                 continuationGroup = null
@@ -190,7 +201,7 @@ class AudioCaptureEngine(
                         finalize(valid = true, split = true)
                         continuationIndex++
                         begin(overlap.snapshot(), OVERLAP_MS)
-                    } else if (silenceFrames >= TRAILING_SILENCE_FRAMES) {
+                    } else if (reachedTrailingSilence(silenceFrames, trailingSilenceMs)) {
                         finalize(speechFrames * FRAME_MS >= MINIMUM_SPEECH_MS)
                         vad.reset()
                         ring.clear()
@@ -228,13 +239,19 @@ class AudioCaptureEngine(
         const val MINIMUM_SPEECH_MS = 350
         const val PRE_ROLL_MS = 1500
         const val OVERLAP_MS = 1000
-        const val TRAILING_SILENCE_MS = 1800
+        const val TRAILING_SILENCE_MS = 30_000
         const val MAX_SEGMENT_MS = 180_000
         const val DECISION_FRAMES = 5
         const val START_POSITIVE_FRAMES = 3
+        fun reachedTrailingSilence(frames: Int, timeoutMs: Int) =
+            frames * FRAME_MS >= timeoutMs
+
+        fun samplesForDuration(sampleRate: Int, durationMs: Int) =
+            sampleRate.toLong() * durationMs / 1000
+
         private const val PRE_ROLL_SAMPLES = SileroVad.SAMPLE_RATE * PRE_ROLL_MS / 1000
         private const val OVERLAP_SAMPLES = SileroVad.SAMPLE_RATE * OVERLAP_MS / 1000
-        private const val MAX_SEGMENT_SAMPLES = SileroVad.SAMPLE_RATE * MAX_SEGMENT_MS / 1000
-        private const val TRAILING_SILENCE_FRAMES = TRAILING_SILENCE_MS / FRAME_MS
+        private val MAX_SEGMENT_SAMPLES =
+            samplesForDuration(SileroVad.SAMPLE_RATE, MAX_SEGMENT_MS)
     }
 }
