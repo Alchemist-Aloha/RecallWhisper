@@ -3,6 +3,11 @@
 > **Implementation amendment (2026-07-25):** The original architecture below
 > remains the design baseline, but the current application intentionally differs
 > from it as recorded in section 0. There is no RecallWhisper backend service.
+>
+> **Status review (2026-07-31):** Section 0 was re-verified line by line against
+> the source tree. It accurately describes the implemented application; the
+> provider-specific chat extensions and the cleartext-traffic manifest flag are
+> now additionally recorded in sections 0.3 and 0.4.
 
 **Specification version:** 1.1  
 **Target platform:** Android application built with Flutter and a native Kotlin recording engine  
@@ -89,6 +94,14 @@ The following features were added beyond the original phased implementation:
 - A topic-centered timeline that preserves each episode's original time range.
 - A configurable summary language. The default follows the transcript's primary
   language; users may specify a language such as English or Simplified Chinese.
+- Word-level timestamps are requested from the transcription API
+  (`response_format=verbose_json` with `timestamp_granularities[]=word`) and the
+  raw response is preserved, but the timestamps are not yet used for evidence
+  linking or seek playback.
+- The summarization chat request carries provider-specific extensions — a
+  `chat_template_kwargs.enable_thinking = false` block and a `/no_think` suffix
+  on the user message — targeting reasoning-capable OpenAI-compatible servers
+  that support them.
 
 ## 0.6 Continuous-transcript organization and summary contract
 
@@ -162,6 +175,11 @@ An OpenASR server using `--tls-self-signed` therefore requires a trusted HTTPS
 reverse proxy, a certificate trusted by Android, or future client-side
 certificate-pinning and pairing support. Enabling insecure HTTP does not make a
 self-signed HTTPS certificate trusted.
+
+The application manifest declares `android:usesCleartextTraffic="true"` to
+support the development-network setting; each API request independently enforces
+the HTTPS scheme in `NetworkPolicy`, which rejects plain HTTP unless the
+"Allow insecure HTTP" preference is enabled.
 
 ## 0.5 Remaining baseline work
 
