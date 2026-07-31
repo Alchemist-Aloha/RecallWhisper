@@ -138,7 +138,11 @@ interface SegmentDao {
         serverState = :serverState, transcriptText = :transcript,
         rawTranscriptJson = :rawTranscript, processingError = :error,
         transcriptionState = :state, transcriptionError = :error,
-        summaryState = CASE WHEN :state = 'COMPLETE' THEN 'PENDING' ELSE summaryState END,
+        summaryState = CASE
+            WHEN :state = 'COMPLETE' THEN 'PENDING'
+            WHEN :state = 'EMPTY' THEN 'EMPTY'
+            ELSE summaryState
+        END,
         updatedAtMs = :now WHERE segmentId = :id""")
     fun updateTranscription(
         id: String,
@@ -167,13 +171,38 @@ interface SegmentDao {
     @Query("""UPDATE capture_segment SET uploadState = 'PENDING',
         serverState = 'QUEUED', processingError = NULL,
         transcriptionState = 'PENDING', transcriptionError = NULL,
-        updatedAtMs = :now WHERE segmentId = :id AND transcriptText IS NULL""")
+        updatedAtMs = :now WHERE segmentId = :id AND transcriptText IS NULL
+        AND transcriptionState IN ('FAILED', 'RETRY_WAIT')""")
     fun retryTranscription(id: String, now: Long): Int
 
     @Query("""UPDATE capture_segment SET serverState = 'QUEUED',
         processingError = NULL, summaryState = 'PENDING', summaryError = NULL,
-        updatedAtMs = :now WHERE segmentId = :id AND transcriptText IS NOT NULL""")
+        updatedAtMs = :now WHERE segmentId = :id AND transcriptText IS NOT NULL
+        AND summaryState IN ('FAILED', 'RETRY_WAIT')""")
     fun retrySummary(id: String, now: Long): Int
+
+    @Query("""UPDATE capture_segment SET uploadState = 'PENDING',
+        serverState = 'QUEUED', processingError = NULL,
+        transcriptionState = 'PENDING', transcriptionError = NULL,
+        updatedAtMs = :now WHERE transcriptText IS NULL
+        AND transcriptionState IN ('FAILED', 'RETRY_WAIT')""")
+    fun retryFailedTranscriptions(now: Long): Int
+
+    @Query("""UPDATE capture_segment SET serverState = 'QUEUED',
+        processingError = NULL, summaryState = 'PENDING', summaryError = NULL,
+        updatedAtMs = :now WHERE transcriptText IS NOT NULL
+        AND summaryState IN ('FAILED', 'RETRY_WAIT')""")
+    fun retryFailedSummaries(now: Long): Int
+
+    @Query("""UPDATE capture_segment SET uploadState = 'PENDING',
+        serverState = 'QUEUED', transcriptionState = 'PENDING',
+        updatedAtMs = :now WHERE transcriptionState = 'PROCESSING'""")
+    fun stopTranscription(now: Long): Int
+
+    @Query("""UPDATE capture_segment SET serverState = 'QUEUED',
+        summaryState = 'PENDING', updatedAtMs = :now
+        WHERE summaryState = 'PROCESSING'""")
+    fun stopSummary(now: Long): Int
 
     @Query("""SELECT * FROM capture_segment
         WHERE transcriptText LIKE '%' || :query || '%'

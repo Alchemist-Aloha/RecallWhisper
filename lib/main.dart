@@ -36,8 +36,19 @@ class WorkflowActivity
       transcribing: command == 'transcribeNow' || value.transcribing,
       summarizing: command == 'summarizeNow' || value.summarizing,
     );
-    await nativeCommands.invokeMethod(command);
-    await refresh();
+    try {
+      await nativeCommands.invokeMethod(command);
+    } finally {
+      await refresh();
+    }
+  }
+
+  Future<void> stop(String command) async {
+    try {
+      await nativeCommands.invokeMethod(command);
+    } finally {
+      await refresh();
+    }
   }
 }
 
@@ -495,6 +506,25 @@ class _TimelinePageState extends State<TimelinePage> {
     }
   }
 
+  Future<void> retryAll(String command) async {
+    try {
+      await nativeCommands.invokeMethod<int>(command);
+      await workflowActivity.refresh();
+      await refresh();
+    } on PlatformException catch (exception) {
+      if (mounted) setState(() => error = exception.message);
+    }
+  }
+
+  Future<void> stop(String command) async {
+    try {
+      await workflowActivity.stop(command);
+      await refresh();
+    } on PlatformException catch (exception) {
+      if (mounted) setState(() => error = exception.message);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
@@ -536,30 +566,40 @@ class _TimelinePageState extends State<TimelinePage> {
                   spacing: 8,
                   children: [
                     FilledButton.icon(
-                      onPressed: activity.transcribing
-                          ? null
-                          : () => run('transcribeNow'),
+                      onPressed: () => activity.transcribing
+                          ? stop('stopTranscription')
+                          : run('transcribeNow'),
                       icon: activity.transcribing
-                          ? const _WorkingIndicator()
+                          ? const Icon(Icons.stop)
                           : const Icon(Icons.graphic_eq),
                       label: Text(
                         activity.transcribing
-                            ? 'Transcribing…'
+                            ? 'Stop transcription'
                             : 'Transcribe pending',
                       ),
                     ),
                     OutlinedButton.icon(
-                      onPressed: activity.summarizing
-                          ? null
-                          : () => run('summarizeNow'),
+                      onPressed: () => activity.summarizing
+                          ? stop('stopSummary')
+                          : run('summarizeNow'),
                       icon: activity.summarizing
-                          ? const _WorkingIndicator()
+                          ? const Icon(Icons.stop)
                           : const Icon(Icons.summarize_outlined),
                       label: Text(
                         activity.summarizing
-                            ? 'Summarizing…'
+                            ? 'Stop summary'
                             : 'Summarize pending',
                       ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => retryAll('retryFailedTranscriptions'),
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Retry failed transcripts'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => retryAll('retryFailedSummaries'),
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Retry failed summaries'),
                     ),
                   ],
                 ),
@@ -805,8 +845,14 @@ class _TranscriptSegment extends StatelessWidget {
           style: Theme.of(context).textTheme.labelMedium,
         ),
         const SizedBox(height: 6),
+        _StateChip(
+          label: segment['transcriptionState'] as String? ?? 'PENDING',
+        ),
+        const SizedBox(height: 6),
         SelectableText(
-          segment['transcript'] as String? ?? 'No transcript yet.',
+          segment['transcriptionState'] == 'EMPTY'
+              ? 'No human voice detected.'
+              : segment['transcript'] as String? ?? 'No transcript yet.',
         ),
         if (segment['transcriptionError'] case final String message)
           _ErrorText(message: message),
@@ -1483,6 +1529,19 @@ class _SettingsPageState extends State<SettingsPage> {
                   ).push(MaterialPageRoute(builder: (_) => const DebugPage())),
                 ),
               ),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.article_outlined),
+                  title: const Text('Debug log'),
+                  subtitle: const Text(
+                    'Recorder and processing events stored on this device',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const DebugLogPage()),
+                  ),
+                ),
+              ),
               const SizedBox(height: 24),
               const Text(
                 'Audio is AES-256-GCM encrypted in private app storage. '
@@ -1491,6 +1550,84 @@ class _SettingsPageState extends State<SettingsPage> {
                 'summarization leave the device.',
               ),
             ],
+          ),
+  );
+}
+
+class DebugLogPage extends StatefulWidget {
+  const DebugLogPage({super.key});
+
+  @override
+  State<DebugLogPage> createState() => _DebugLogPageState();
+}
+
+class _DebugLogPageState extends State<DebugLogPage> {
+  String logs = '';
+  String? error;
+  bool busy = true;
+
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  Future<void> load() async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      final value = await nativeCommands.invokeMethod<String>('debugLogs');
+      if (mounted) setState(() => logs = value ?? '');
+    } on PlatformException catch (exception) {
+      if (mounted) setState(() => error = exception.message);
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> clear() async {
+    await nativeCommands.invokeMethod('debugClearLogs');
+    if (mounted) setState(() => logs = '');
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Debug log'),
+      actions: [
+        IconButton(
+          tooltip: 'Copy log',
+          onPressed: logs.isEmpty
+              ? null
+              : () => Clipboard.setData(ClipboardData(text: logs)),
+          icon: const Icon(Icons.copy_outlined),
+        ),
+        IconButton(
+          tooltip: 'Refresh log',
+          onPressed: load,
+          icon: const Icon(Icons.refresh),
+        ),
+        IconButton(
+          tooltip: 'Clear log',
+          onPressed: logs.isEmpty ? null : clear,
+          icon: const Icon(Icons.delete_outline),
+        ),
+      ],
+    ),
+    body: busy
+        ? const Center(child: CircularProgressIndicator())
+        : error != null
+        ? Center(child: Text(error!))
+        : logs.isEmpty
+        ? const Center(child: Text('No debug events yet.'))
+        : SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: SelectableText(
+              logs,
+              style: const TextStyle(fontFamily: 'monospace'),
+            ),
           ),
   );
 }

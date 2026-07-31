@@ -2,6 +2,8 @@ package com.recallwhisper.recall_whisper.recording
 
 import androidx.work.NetworkType
 import java.io.IOException
+import org.json.JSONObject
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
@@ -27,9 +29,24 @@ class UploadSchedulerTest {
     @Test
     fun retriesOnlyTemporaryFailuresAndStopsAfterFiveAttempts() {
         assertTrue(RetryPolicy.shouldRetry(IOException("offline"), attempt = 0))
+        assertTrue(RetryPolicy.shouldRetry(ApiException(408, "timeout"), attempt = 0))
+        assertTrue(RetryPolicy.shouldRetry(ApiException(429, "busy"), attempt = 3))
+        assertTrue(RetryPolicy.shouldRetry(ApiException(500, "down"), attempt = 0))
+        assertTrue(RetryPolicy.shouldRetry(ApiException(599, "down"), attempt = 0))
+        assertFalse(RetryPolicy.shouldRetry(ApiException(400, "bad request"), attempt = 0))
         assertTrue(RetryPolicy.shouldRetry(ApiException(503, "busy"), attempt = 0))
         assertFalse(RetryPolicy.shouldRetry(ApiException(401, "unauthorized"), attempt = 0))
+        assertFalse(RetryPolicy.shouldRetry(ApiException(600, "invalid"), attempt = 0))
         assertFalse(RetryPolicy.shouldRetry(IllegalArgumentException("bad config"), attempt = 0))
         assertFalse(RetryPolicy.shouldRetry(IOException("offline"), attempt = 4))
+    }
+
+    @Test
+    fun blankTranscriptionResponsesAreEmptyRatherThanFailures() {
+        assertNull(transcriptionText(JSONObject()))
+        assertNull(transcriptionText(JSONObject().put("text", "")))
+        assertNull(transcriptionText(JSONObject().put("text", " \n ")))
+        assertNull(transcriptionText(JSONObject().put("text", JSONObject.NULL)))
+        assertEquals("spoken words", transcriptionText(JSONObject().put("text", " spoken words ")))
     }
 }

@@ -15,16 +15,24 @@ import java.time.Duration
 import java.util.UUID
 
 object ProcessingScheduler {
+    private const val TRANSCRIPTION_WORK = "segment_transcription"
+    private const val SUMMARY_WORK = "segment_summarization"
+
+    fun hasTranscriptionConfig(context: Context) =
+        hasEndpoint(context, "transcription_url")
+
+    fun hasSummaryConfig(context: Context) =
+        hasEndpoint(context, "summarization_url")
+
     fun enqueueTranscription(
         context: Context,
         immediate: Boolean = false,
         resubmitted: Boolean = false,
     ): Boolean {
-        val preferences = context.getSharedPreferences("recall_whisper", Context.MODE_PRIVATE)
-        if (preferences.getString("transcription_url", "").isNullOrBlank()) return false
+        if (!hasTranscriptionConfig(context)) return false
         enqueue<TranscriptionWorker>(
             context,
-            "segment_transcription",
+            TRANSCRIPTION_WORK,
             immediate,
             resubmitted,
         )
@@ -36,11 +44,20 @@ object ProcessingScheduler {
         immediate: Boolean = false,
         resubmitted: Boolean = false,
     ): Boolean {
-        val preferences = context.getSharedPreferences("recall_whisper", Context.MODE_PRIVATE)
-        if (preferences.getString("summarization_url", "").isNullOrBlank()) return false
-        enqueue<SummaryWorker>(context, "segment_summarization", immediate, resubmitted)
+        if (!hasSummaryConfig(context)) return false
+        enqueue<SummaryWorker>(context, SUMMARY_WORK, immediate, resubmitted)
         return true
     }
+
+    fun stopTranscription(context: Context) =
+        WorkManager.getInstance(context).cancelUniqueWork(TRANSCRIPTION_WORK)
+
+    fun stopSummary(context: Context) =
+        WorkManager.getInstance(context).cancelUniqueWork(SUMMARY_WORK)
+
+    private fun hasEndpoint(context: Context, key: String) =
+        !context.getSharedPreferences("recall_whisper", Context.MODE_PRIVATE)
+            .getString(key, "").isNullOrBlank()
 
     private inline fun <reified T : CoroutineWorker> enqueue(
         context: Context,
@@ -90,7 +107,10 @@ open class TranscriptionWorker(context: Context, parameters: WorkerParameters) :
         val encryption = EncryptionManager()
         val api = DirectApiClient(applicationContext)
         var retry = false
-        for (segment in dao.pendingTranscription()) {
+        val segments = dao.pendingTranscription()
+        DebugLog.info(applicationContext, "Transcription worker started (${segments.size} pending)")
+        for (segment in segments) {
+            if (isStopped) break
             try {
                 dao.updateTranscription(
                     segment.segmentId,
@@ -112,19 +132,24 @@ open class TranscriptionWorker(context: Context, parameters: WorkerParameters) :
                 } finally {
                     audio.fill(0)
                 }
-                val transcript = rawTranscript.getString("text").trim()
-                check(transcript.isNotBlank()) { "Transcription API returned no text." }
+                if (isStopped) break
+                val transcript = transcriptionText(rawTranscript)
                 dao.updateTranscription(
                     segment.segmentId,
+                    if (transcript == null) "EMPTY" else "COMPLETE",
                     "COMPLETE",
-                    "COMPLETE",
-                    "TRANSCRIBED",
+                    if (transcript == null) "EMPTY" else "TRANSCRIBED",
                     transcript,
                     rawTranscript.toString(),
                     null,
                     now(),
                 )
+                DebugLog.info(
+                    applicationContext,
+                    "Transcription ${segment.segmentId} ${if (transcript == null) "empty" else "complete"}",
+                )
             } catch (error: Exception) {
+                if (isStopped) break
                 val canRetry = RetryPolicy.shouldRetry(error, runAttemptCount)
                 dao.updateTranscription(
                     segment.segmentId,
@@ -137,8 +162,14 @@ open class TranscriptionWorker(context: Context, parameters: WorkerParameters) :
                     now(),
                 )
                 retry = retry || canRetry
+                DebugLog.error(
+                    applicationContext,
+                    "Transcription ${segment.segmentId} failed (retry=$canRetry)",
+                    error,
+                )
             }
         }
+        DebugLog.info(applicationContext, "Transcription worker finished (retry=$retry)")
         return if (retry) Result.retry() else Result.success()
     }
 
@@ -164,12 +195,15 @@ class SummaryWorker(context: Context, parameters: WorkerParameters) :
             preferences.getInt("episode_gap_minutes", 5) * 60_000L,
             preferences.getInt("episode_max_minutes", 30) * 60_000L,
         )
+        DebugLog.info(applicationContext, "Summary worker started (${groups.size} episodes)")
         var retry = false
         for (segments in groups) {
+            if (isStopped) break
             try {
                 segments.forEach { mark(it, "PROCESSING", "SUMMARIZING", null) }
                 val topics = dao.recentTopics()
                 val result = api.summarizeEpisode(segments, topics)
+                if (isStopped) break
                 val topicsById = topics.associateBy { it.topicId }
                 val requestedId = result.optString("canonical_topic_id")
                     .takeUnless { it.isBlank() || it == "null" }
@@ -228,7 +262,9 @@ class SummaryWorker(context: Context, parameters: WorkerParameters) :
                         )
                     }
                 }
+                DebugLog.info(applicationContext, "Summary $episodeId complete")
             } catch (error: Exception) {
+                if (isStopped) break
                 val canRetry = RetryPolicy.shouldRetry(error, runAttemptCount)
                 segments.forEach {
                     mark(
@@ -239,8 +275,14 @@ class SummaryWorker(context: Context, parameters: WorkerParameters) :
                     )
                 }
                 retry = retry || canRetry
+                DebugLog.error(
+                    applicationContext,
+                    "Summary failed (retry=$canRetry)",
+                    error,
+                )
             }
         }
+        DebugLog.info(applicationContext, "Summary worker finished (retry=$retry)")
         return if (retry) Result.retry() else Result.success()
     }
 
@@ -260,6 +302,9 @@ class SummaryWorker(context: Context, parameters: WorkerParameters) :
 
     private fun now() = System.currentTimeMillis()
 }
+
+internal fun transcriptionText(response: org.json.JSONObject): String? =
+    response.optString("text").trim().takeUnless { it.isBlank() || it == "null" }
 
 internal object RetryPolicy {
     const val MAX_ATTEMPTS = 5

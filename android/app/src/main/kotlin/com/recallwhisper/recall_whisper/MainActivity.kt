@@ -13,6 +13,7 @@ import com.recallwhisper.recall_whisper.recording.EncryptionManager
 import com.recallwhisper.recall_whisper.recording.PlaybackManager
 import com.recallwhisper.recall_whisper.recording.DirectApiClient
 import com.recallwhisper.recall_whisper.recording.DataExporter
+import com.recallwhisper.recall_whisper.recording.DebugLog
 import com.recallwhisper.recall_whisper.recording.ProcessingScheduler
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -157,7 +158,14 @@ class MainActivity : FlutterActivity() {
                     val id = call.argument<String>("id")!!
                     val dao = RecorderDatabase.get(this).segments()
                     val summary = call.method == "retrySummary"
-                    val reset = if (summary) {
+                    val configured = if (summary) {
+                        ProcessingScheduler.hasSummaryConfig(this)
+                    } else {
+                        ProcessingScheduler.hasTranscriptionConfig(this)
+                    }
+                    val reset = if (!configured) {
+                        0
+                    } else if (summary) {
                         dao.retrySummary(id, System.currentTimeMillis())
                     } else {
                         dao.retryTranscription(id, System.currentTimeMillis())
@@ -181,6 +189,70 @@ class MainActivity : FlutterActivity() {
                             "Could not resubmit this ${if (summary) "summary" else "transcription"}. Check its state and settings.",
                             null,
                         )
+                    }
+                }
+                "retryFailedTranscriptions", "retryFailedSummaries" ->
+                    databaseExecutor.execute {
+                        val summary = call.method == "retryFailedSummaries"
+                        val configured = if (summary) {
+                            ProcessingScheduler.hasSummaryConfig(this)
+                        } else {
+                            ProcessingScheduler.hasTranscriptionConfig(this)
+                        }
+                        if (!configured) {
+                            runOnUiThread {
+                                result.error(
+                                    "missing_config",
+                                    "Configure the ${if (summary) "summarization" else "transcription"} server first.",
+                                    null,
+                                )
+                            }
+                            return@execute
+                        }
+                        val dao = RecorderDatabase.get(this).segments()
+                        val reset = if (summary) {
+                            dao.retryFailedSummaries(System.currentTimeMillis())
+                        } else {
+                            dao.retryFailedTranscriptions(System.currentTimeMillis())
+                        }
+                        if (reset > 0) {
+                            if (summary) {
+                                ProcessingScheduler.enqueueSummary(
+                                    this,
+                                    immediate = true,
+                                    resubmitted = true,
+                                )
+                            } else {
+                                ProcessingScheduler.enqueueTranscription(
+                                    this,
+                                    immediate = true,
+                                    resubmitted = true,
+                                )
+                            }
+                        }
+                        runOnUiThread { result.success(reset) }
+                }
+                "stopTranscription", "stopSummary" -> databaseExecutor.execute {
+                    val summary = call.method == "stopSummary"
+                    runCatching {
+                        val operation = if (summary) {
+                            ProcessingScheduler.stopSummary(this)
+                        } else {
+                            ProcessingScheduler.stopTranscription(this)
+                        }
+                        operation.result.get()
+                        val dao = RecorderDatabase.get(this).segments()
+                        if (summary) {
+                            dao.stopSummary(System.currentTimeMillis())
+                        } else {
+                            dao.stopTranscription(System.currentTimeMillis())
+                        }
+                    }.onSuccess { stopped ->
+                        runOnUiThread { result.success(stopped) }
+                    }.onFailure { error ->
+                        runOnUiThread {
+                            result.error("stop_failed", error.message, null)
+                        }
                     }
                 }
                 "processingStatus" -> databaseExecutor.execute {
@@ -246,6 +318,11 @@ class MainActivity : FlutterActivity() {
                 }
                 "debugTranscriptionHealth" -> serverCall(result) {
                     DirectApiClient(this).transcriptionHealth()
+                }
+                "debugLogs" -> result.success(DebugLog.read(this))
+                "debugClearLogs" -> {
+                    DebugLog.clear(this)
+                    result.success(null)
                 }
                 "deleteSegment" -> databaseExecutor.execute {
                     val id = call.argument<String>("id")!!

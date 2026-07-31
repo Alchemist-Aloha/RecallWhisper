@@ -33,7 +33,9 @@ class RecorderForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action ?: ACTION_START) {
+        val action = intent?.action ?: ACTION_START
+        DebugLog.info(this, "Recorder command ${action.substringAfterLast('.')}")
+        when (action) {
             ACTION_START, ACTION_RESUME -> startCapture()
             ACTION_PAUSE -> pauseCapture()
             ACTION_STOP -> stopCapture()
@@ -50,8 +52,12 @@ class RecorderForegroundService : Service() {
                 RecorderBridge.state(it)
                 notify(it)
             },
-            onSegment = RecorderBridge::segment,
+            onSegment = { id, durationMs ->
+                DebugLog.info(this, "Captured segment $id (${durationMs}ms)")
+                RecorderBridge.segment(id, durationMs)
+            },
             onError = { code, message ->
+                DebugLog.error(this, "Recorder $code: $message")
                 RecorderBridge.state("ERROR")
                 RecorderBridge.error(code, message)
                 notify("ERROR")

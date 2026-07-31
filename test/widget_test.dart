@@ -68,6 +68,25 @@ void main() {
     expect(sent, isTrue);
   });
 
+  testWidgets('debug log subpage loads and clears entries', (tester) async {
+    var cleared = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'debugLogs') {
+            return '2026-07-31 INFO Recorder started\n';
+          }
+          if (call.method == 'debugClearLogs') cleared = true;
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: DebugLogPage()));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Recorder started'), findsOneWidget);
+    await tester.tap(find.byTooltip('Clear log'));
+    await tester.pumpAndSettle();
+    expect(cleared, isTrue);
+    expect(find.text('No debug events yet.'), findsOneWidget);
+  });
+
   testWidgets('timeline separates transcription and summary states', (
     tester,
   ) async {
@@ -152,13 +171,14 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
     await tester.pump();
     expect(find.text('Summary is running…'), findsOneWidget);
-    expect(find.text('Summarizing…'), findsOneWidget);
+    expect(find.text('Stop summary'), findsOneWidget);
     final button = tester.widget<OutlinedButton>(
-      find.widgetWithText(OutlinedButton, 'Summarizing…'),
+      find.widgetWithText(OutlinedButton, 'Stop summary'),
     );
-    expect(button.onPressed, isNull);
+    expect(button.onPressed, isNotNull);
     running = false;
     await workflowActivity.refresh();
+    await tester.pump();
   });
 
   testWidgets('failed timeline jobs can be manually resubmitted', (
@@ -198,9 +218,86 @@ void main() {
     await tester.tap(find.text('Transcript'));
     await tester.pumpAndSettle();
     expect(find.text('Resubmit transcription'), findsOneWidget);
+    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Resubmit transcription'));
     await tester.pumpAndSettle();
     expect(calls, containsAll(<String>['retrySummary', 'retryTranscription']));
+  });
+
+  testWidgets('transcripts can retry all failed jobs and stop active jobs', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    var transcribing = true;
+    var summarizing = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          calls.add(call.method);
+          if (call.method == 'timeline') return <Object>[];
+          if (call.method == 'stopTranscription') transcribing = false;
+          if (call.method == 'stopSummary') summarizing = false;
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': transcribing,
+              'summarizing': summarizing,
+            };
+          }
+          return 0;
+        });
+    workflowActivity.value = (transcribing: true, summarizing: true);
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pump();
+    await tester.tap(find.text('Stop transcription'));
+    await tester.pump();
+    await tester.tap(find.text('Stop summary'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Retry failed transcripts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Retry failed summaries'));
+    await tester.pumpAndSettle();
+    expect(
+      calls,
+      containsAll(<String>[
+        'stopTranscription',
+        'stopSummary',
+        'retryFailedTranscriptions',
+        'retryFailedSummaries',
+      ]),
+    );
+  });
+
+  testWidgets('empty transcription has a distinct state and explanation', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'timeline') {
+            return <Object>[
+              <String, Object?>{
+                'id': 'silent-segment',
+                'startedAt': 0,
+                'summaryState': 'EMPTY',
+                'segments': <Object>[
+                  <String, Object?>{
+                    'id': 'silent-segment',
+                    'startedAt': 0,
+                    'transcript': null,
+                    'transcriptionState': 'EMPTY',
+                  },
+                ],
+              },
+            ];
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+    expect(find.text('empty'), findsOneWidget);
+    await tester.tap(find.text('Transcript'));
+    await tester.pumpAndSettle();
+    expect(find.text('No human voice detected.'), findsOneWidget);
+    expect(find.text('Resubmit transcription'), findsNothing);
   });
 
   testWidgets('topics keep recurring episodes as separate time ranges', (
