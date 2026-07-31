@@ -18,10 +18,15 @@ class WorkflowActivity
       final status = await nativeCommands.invokeMapMethod<Object?, Object?>(
         'processingStatus',
       );
-      value = (
+      final next = (
         transcribing: status?['transcribing'] == true,
         summarizing: status?['summarizing'] == true,
       );
+      if (next == value) {
+        notifyListeners();
+      } else {
+        value = next;
+      }
       _timer?.cancel();
       if (value.transcribing || value.summarizing) {
         _timer = Timer(const Duration(seconds: 1), refresh);
@@ -82,8 +87,26 @@ class MainShell extends StatefulWidget {
   State<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   int index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    workflowActivity.refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) workflowActivity.refresh();
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -124,8 +147,7 @@ class RecorderPage extends StatefulWidget {
   State<RecorderPage> createState() => _RecorderPageState();
 }
 
-class _RecorderPageState extends State<RecorderPage>
-    with WidgetsBindingObserver {
+class _RecorderPageState extends State<RecorderPage> {
   static const _events = EventChannel('recall_whisper/recorder_events');
 
   StreamSubscription<Object?>? _subscription;
@@ -133,26 +155,21 @@ class _RecorderPageState extends State<RecorderPage>
   String? _playingId;
   String? _error;
   List<Map<Object?, Object?>> _segments = const [];
+  int _refreshRequest = 0;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _subscription = _events.receiveBroadcastStream().listen(_onEvent);
+    workflowActivity.addListener(_refresh);
     _refresh();
-    workflowActivity.refresh();
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
+    workflowActivity.removeListener(_refresh);
     _subscription?.cancel();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refresh();
   }
 
   void _onEvent(Object? raw) {
@@ -169,6 +186,7 @@ class _RecorderPageState extends State<RecorderPage>
   }
 
   Future<void> _refresh() async {
+    final request = ++_refreshRequest;
     try {
       final status = await nativeCommands.invokeMapMethod<Object?, Object?>(
         'status',
@@ -176,7 +194,7 @@ class _RecorderPageState extends State<RecorderPage>
       final segments = await nativeCommands.invokeListMethod<Object?>(
         'segments',
       );
-      if (!mounted) return;
+      if (!mounted || request != _refreshRequest) return;
       setState(() {
         _state = status?['state'] as String? ?? 'STOPPED';
         _segments = (segments ?? const [])
@@ -184,7 +202,9 @@ class _RecorderPageState extends State<RecorderPage>
             .toList();
       });
     } on PlatformException catch (error) {
-      if (mounted) setState(() => _error = error.message);
+      if (mounted && request == _refreshRequest) {
+        setState(() => _error = error.message);
+      }
     }
   }
 
@@ -426,10 +446,10 @@ class _WorkflowBanner extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final label = activity.transcribing && activity.summarizing
-        ? 'Transcription and summary are running'
+        ? 'Transcription and summary are queued or running'
         : activity.transcribing
-        ? 'Transcription is running'
-        : 'Summary is running';
+        ? 'Transcription is queued or running'
+        : 'Summary is queued or running';
     return Semantics(
       liveRegion: true,
       label: label,
@@ -465,17 +485,26 @@ class TimelinePage extends StatefulWidget {
 class _TimelinePageState extends State<TimelinePage> {
   List<Map<Object?, Object?>> items = const [];
   String? error;
+  int _refreshRequest = 0;
 
   @override
   void initState() {
     super.initState();
+    workflowActivity.addListener(refresh);
     refresh();
   }
 
+  @override
+  void dispose() {
+    workflowActivity.removeListener(refresh);
+    super.dispose();
+  }
+
   Future<void> refresh() async {
+    final request = ++_refreshRequest;
     try {
       final values = await nativeCommands.invokeListMethod<Object?>('timeline');
-      if (!mounted) return;
+      if (!mounted || request != _refreshRequest) return;
       setState(() {
         items = (values ?? const [])
             .map((value) => Map<Object?, Object?>.from(value! as Map))
@@ -483,7 +512,9 @@ class _TimelinePageState extends State<TimelinePage> {
         error = null;
       });
     } on PlatformException catch (exception) {
-      if (mounted) setState(() => error = exception.message);
+      if (mounted && request == _refreshRequest) {
+        setState(() => error = exception.message);
+      }
     }
   }
 
@@ -1021,14 +1052,29 @@ class _SearchPageState extends State<SearchPage> {
   final controller = TextEditingController();
   List<Map<Object?, Object?>> results = const [];
   String? error;
+  String _query = '';
+  int _searchRequest = 0;
 
-  Future<void> search() async {
-    if (controller.text.trim().isEmpty) return;
+  @override
+  void initState() {
+    super.initState();
+    workflowActivity.addListener(_refreshSearch);
+  }
+
+  void _refreshSearch() {
+    if (_query.isNotEmpty) search(_query);
+  }
+
+  Future<void> search([String? existingQuery]) async {
+    final query = existingQuery ?? controller.text.trim();
+    if (query.isEmpty) return;
+    _query = query;
+    final request = ++_searchRequest;
     try {
       final values = await nativeCommands.invokeListMethod<Object?>('search', {
-        'query': controller.text.trim(),
+        'query': query,
       });
-      if (mounted) {
+      if (mounted && request == _searchRequest) {
         setState(() {
           results = (values ?? const [])
               .map((value) => Map<Object?, Object?>.from(value! as Map))
@@ -1037,12 +1083,15 @@ class _SearchPageState extends State<SearchPage> {
         });
       }
     } on PlatformException catch (exception) {
-      if (mounted) setState(() => error = exception.message);
+      if (mounted && request == _searchRequest) {
+        setState(() => error = exception.message);
+      }
     }
   }
 
   @override
   void dispose() {
+    workflowActivity.removeListener(_refreshSearch);
     controller.dispose();
     super.dispose();
   }
@@ -1094,17 +1143,26 @@ class TopicsPage extends StatefulWidget {
 class _TopicsPageState extends State<TopicsPage> {
   List<Map<Object?, Object?>> topics = const [];
   String? error;
+  int _refreshRequest = 0;
 
   @override
   void initState() {
     super.initState();
+    workflowActivity.addListener(refresh);
     refresh();
   }
 
+  @override
+  void dispose() {
+    workflowActivity.removeListener(refresh);
+    super.dispose();
+  }
+
   Future<void> refresh() async {
+    final request = ++_refreshRequest;
     try {
       final values = await nativeCommands.invokeListMethod<Object?>('topics');
-      if (!mounted) return;
+      if (!mounted || request != _refreshRequest) return;
       setState(() {
         topics = (values ?? const [])
             .map((value) => Map<Object?, Object?>.from(value! as Map))
@@ -1112,7 +1170,9 @@ class _TopicsPageState extends State<TopicsPage> {
         error = null;
       });
     } on PlatformException catch (exception) {
-      if (mounted) setState(() => error = exception.message);
+      if (mounted && request == _refreshRequest) {
+        setState(() => error = exception.message);
+      }
     }
   }
 
@@ -1147,6 +1207,11 @@ class _TopicsPageState extends State<TopicsPage> {
       child: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          ValueListenableBuilder(
+            valueListenable: workflowActivity,
+            builder: (context, activity, _) =>
+                _WorkflowBanner(activity: activity),
+          ),
           const Text(
             'Recurring subjects are grouped here while every separate occurrence keeps its own time range.',
           ),
@@ -1282,6 +1347,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final config = await nativeCommands.invokeMapMethod<Object?, Object?>(
       'config',
     );
+    if (!mounted) return;
     transcriptionUrl.text = config?['transcriptionUrl'] as String? ?? '';
     transcriptionToken.text = config?['transcriptionToken'] as String? ?? '';
     transcriptionModel.text =
@@ -1322,6 +1388,7 @@ class _SettingsPageState extends State<SettingsPage> {
       'episodeMaxMinutes': episodeMaxMinutes,
     });
     await nativeCommands.invokeMethod('sync');
+    await workflowActivity.refresh();
     if (mounted) {
       ScaffoldMessenger.of(
         context,

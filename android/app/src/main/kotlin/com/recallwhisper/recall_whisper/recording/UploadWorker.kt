@@ -169,6 +169,9 @@ open class TranscriptionWorker(context: Context, parameters: WorkerParameters) :
                 )
             }
         }
+        if (!isStopped) {
+            ProcessingScheduler.enqueueSummary(applicationContext, resubmitted = true)
+        }
         DebugLog.info(applicationContext, "Transcription worker finished (retry=$retry)")
         return if (retry) Result.retry() else Result.success()
     }

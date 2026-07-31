@@ -195,12 +195,14 @@ interface SegmentDao {
     fun retryFailedSummaries(now: Long): Int
 
     @Query("""UPDATE capture_segment SET uploadState = 'PENDING',
-        serverState = 'QUEUED', transcriptionState = 'PENDING',
+        serverState = 'QUEUED', processingError = NULL,
+        transcriptionState = 'PENDING', transcriptionError = NULL,
         updatedAtMs = :now WHERE transcriptionState = 'PROCESSING'""")
     fun stopTranscription(now: Long): Int
 
     @Query("""UPDATE capture_segment SET serverState = 'QUEUED',
-        summaryState = 'PENDING', updatedAtMs = :now
+        processingError = NULL, summaryState = 'PENDING', summaryError = NULL,
+        updatedAtMs = :now
         WHERE summaryState = 'PROCESSING'""")
     fun stopSummary(now: Long): Int
 

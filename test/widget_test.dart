@@ -170,7 +170,7 @@ void main() {
     workflowActivity.value = (transcribing: false, summarizing: true);
     await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
     await tester.pump();
-    expect(find.text('Summary is running…'), findsOneWidget);
+    expect(find.text('Summary is queued or running…'), findsOneWidget);
     expect(find.text('Stop summary'), findsOneWidget);
     final button = tester.widget<OutlinedButton>(
       find.widgetWithText(OutlinedButton, 'Stop summary'),
@@ -343,6 +343,189 @@ void main() {
     expect(find.text('Submission handling'), findsOneWidget);
     expect(find.text('Moved state out of the widget.'), findsOneWidget);
     expect(find.text('Prevented duplicate submissions.'), findsOneWidget);
+  });
+
+  testWidgets('successful equal workflow polls refresh timeline data', (
+    tester,
+  ) async {
+    var timelineCalls = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          if (call.method == 'timeline') {
+            timelineCalls++;
+            return <Object>[
+              <String, Object?>{
+                'startedAt': 0,
+                'transcript': 'Transcript $timelineCalls',
+                'summaryState': 'WAITING',
+                'transcriptionState': 'COMPLETE',
+              },
+            ];
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: false);
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+    expect(timelineCalls, 1);
+    await workflowActivity.refresh();
+    await tester.pumpAndSettle();
+    expect(timelineCalls, 2);
+    await tester.tap(find.text('Transcript'));
+    await tester.pumpAndSettle();
+    expect(find.text('Transcript 2'), findsOneWidget);
+  });
+
+  testWidgets('successful equal workflow polls refresh topics and banner', (
+    tester,
+  ) async {
+    var topicCalls = 0;
+    var summarizing = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': summarizing,
+            };
+          }
+          if (call.method == 'topics') {
+            topicCalls++;
+            return <Object>[];
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: true);
+    await tester.pumpWidget(const MaterialApp(home: TopicsPage()));
+    await tester.pump();
+    expect(find.text('Summary is queued or running…'), findsOneWidget);
+    await workflowActivity.refresh();
+    await tester.pump();
+    expect(topicCalls, 2);
+    summarizing = false;
+    await workflowActivity.refresh();
+    await tester.pump();
+  });
+
+  testWidgets('successful equal workflow polls refresh recorder rows', (
+    tester,
+  ) async {
+    var segmentCalls = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'status') {
+            return <String, Object>{'state': 'STOPPED'};
+          }
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          if (call.method == 'segments') {
+            segmentCalls++;
+            if (segmentCalls == 1) return <Object>[];
+            return <Object>[
+              <String, Object>{
+                'id': 'segment-1',
+                'startedAt': 0,
+                'durationMs': 1000,
+                'sizeBytes': 1024,
+                'uploadState': 'COMPLETE',
+                'serverState': 'TRANSCRIBED',
+              },
+            ];
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: false);
+    await tester.pumpWidget(const MaterialApp(home: RecorderPage()));
+    await tester.pumpAndSettle();
+    expect(find.text('No speech segments yet.'), findsOneWidget);
+    await workflowActivity.refresh();
+    await tester.pumpAndSettle();
+    expect(segmentCalls, 2);
+    expect(find.textContaining('COMPLETE · TRANSCRIBED'), findsOneWidget);
+  });
+
+  testWidgets('workflow polls repeat the existing search query', (
+    tester,
+  ) async {
+    var searchCalls = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          if (call.method == 'search') {
+            searchCalls++;
+            expect(call.arguments, <String, Object>{'query': 'decision'});
+            return <Object>[
+              <String, Object>{
+                'title': 'Result',
+                'excerpt': 'Version $searchCalls',
+              },
+            ];
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: false);
+    await tester.pumpWidget(const MaterialApp(home: SearchPage()));
+    await tester.enterText(find.byType(SearchBar), 'decision');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(find.text('Version 1'), findsOneWidget);
+    await workflowActivity.refresh();
+    await tester.pumpAndSettle();
+    expect(searchCalls, 2);
+    expect(find.text('Version 2'), findsOneWidget);
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pumpAndSettle();
+    await workflowActivity.refresh();
+    await tester.pumpAndSettle();
+    expect(searchCalls, 2);
+  });
+
+  testWidgets('saving settings starts shared workflow activity', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          calls.add(call.method);
+          if (call.method == 'config') return <String, Object?>{};
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: false);
+    await tester.pumpWidget(const MaterialApp(home: SettingsPage()));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Save'),
+      500,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(
+      calls,
+      containsAllInOrder(<String>['saveConfig', 'sync', 'processingStatus']),
+    );
   });
 
   testWidgets('bottom navigation exposes the three primary panels', (

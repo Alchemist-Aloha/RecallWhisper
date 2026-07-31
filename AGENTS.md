@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+## Agents Workflow
+
+Produce detailed synchronization plan and assign bounded implementation to Flutter expert subagents. Each subagent should be responsible for a single Flutter feature or native recording component. Subagents should communicate through the main agent, which coordinates the overall architecture and ensures consistency with plan and spec.
+
 ## Project Structure & Module Organization
 
 RecallWhisper is a Flutter Android app with a native Kotlin recording pipeline. The Flutter UI and platform-channel calls currently live in `lib/main.dart`; widget tests are in `test/widget_test.dart`. Native code is under `android/app/src/main/kotlin/com/recallwhisper/recall_whisper/`, with recording, encryption, Room, WorkManager, playback, and API code in `recording/`. Matching local JVM tests live under `android/app/src/test/kotlin/.../recording/`. Android manifests, resources, and the bundled `silero_vad.onnx` model are under `android/app/src/main/`.
