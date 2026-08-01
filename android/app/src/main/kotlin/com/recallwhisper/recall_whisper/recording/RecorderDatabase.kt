@@ -217,6 +217,21 @@ interface SegmentDao {
 
     @Query("DELETE FROM capture_segment WHERE segmentId = :id")
     fun delete(id: String)
+
+    @Query("SELECT * FROM episode_segment WHERE episodeId = :episodeId")
+    fun episodeSegments(episodeId: String): List<EpisodeSegment>
+
+    @Query("DELETE FROM episode_segment WHERE episodeId = :episodeId")
+    fun deleteEpisodeSegments(episodeId: String)
+
+    @Query("DELETE FROM topic_episode WHERE episodeId = :episodeId")
+    fun deleteEpisode(episodeId: String)
+
+    @Query(
+        """DELETE FROM topic WHERE topicId NOT IN
+        (SELECT DISTINCT topicId FROM topic_episode)""",
+    )
+    fun deleteOrphanTopics()
 }
 
 @Database(

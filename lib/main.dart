@@ -435,6 +435,18 @@ class _WorkingIndicator extends SizedBox {
       );
 }
 
+class _ButtonLabel extends StatelessWidget {
+  const _ButtonLabel({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => FittedBox(
+    fit: BoxFit.scaleDown,
+    child: Text(text),
+  );
+}
+
 class _WorkflowBanner extends StatelessWidget {
   const _WorkflowBanner({required this.activity});
 
@@ -556,6 +568,20 @@ class _TimelinePageState extends State<TimelinePage> {
     }
   }
 
+  Future<void> deleteTranscript(Map<Object?, Object?> item) async {
+    final id = item['id']! as String;
+    try {
+      if (item['isEpisode'] == true) {
+        await nativeCommands.invokeMethod('deleteEpisode', {'id': id});
+      } else {
+        await nativeCommands.invokeMethod('deleteSegment', {'id': id});
+      }
+      await refresh();
+    } on PlatformException catch (exception) {
+      if (mounted) setState(() => error = exception.message);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
@@ -593,46 +619,96 @@ class _TimelinePageState extends State<TimelinePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _WorkflowBanner(activity: activity),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: () => activity.transcribing
-                          ? stop('stopTranscription')
-                          : run('transcribeNow'),
-                      icon: activity.transcribing
-                          ? const Icon(Icons.stop)
-                          : const Icon(Icons.graphic_eq),
-                      label: Text(
-                        activity.transcribing
-                            ? 'Stop transcription'
-                            : 'Transcribe pending',
-                      ),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.playlist_play,
+                              size: 18,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Queue processing',
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: () => activity.transcribing
+                                    ? stop('stopTranscription')
+                                    : run('transcribeNow'),
+                                icon: Icon(
+                                  activity.transcribing
+                                      ? Icons.stop
+                                      : Icons.graphic_eq,
+                                ),
+                                label: _ButtonLabel(
+                                  text: activity.transcribing
+                                      ? 'Stop transcription'
+                                      : 'Transcribe pending',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: FilledButton.tonalIcon(
+                                onPressed: () => activity.summarizing
+                                    ? stop('stopSummary')
+                                    : run('summarizeNow'),
+                                icon: Icon(
+                                  activity.summarizing
+                                      ? Icons.stop
+                                      : Icons.summarize_outlined,
+                                ),
+                                label: _ButtonLabel(
+                                  text: activity.summarizing
+                                      ? 'Stop summary'
+                                      : 'Summarize pending',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () =>
+                                    retryAll('retryFailedTranscriptions'),
+                                icon: const Icon(Icons.refresh, size: 18),
+                                label: const _ButtonLabel(
+                                  text: 'Retry failed transcripts',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () =>
+                                    retryAll('retryFailedSummaries'),
+                                icon: const Icon(Icons.refresh, size: 18),
+                                label: const _ButtonLabel(
+                                  text: 'Retry failed summaries',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
-                    OutlinedButton.icon(
-                      onPressed: () => activity.summarizing
-                          ? stop('stopSummary')
-                          : run('summarizeNow'),
-                      icon: activity.summarizing
-                          ? const Icon(Icons.stop)
-                          : const Icon(Icons.summarize_outlined),
-                      label: Text(
-                        activity.summarizing
-                            ? 'Stop summary'
-                            : 'Summarize pending',
-                      ),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () => retryAll('retryFailedTranscriptions'),
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Retry failed transcripts'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () => retryAll('retryFailedSummaries'),
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Retry failed summaries'),
-                    ),
-                  ],
+                  ),
                 ),
               ],
             ),
@@ -662,6 +738,7 @@ class _TimelinePageState extends State<TimelinePage> {
                 retryTranscription: (id) => retry('retryTranscription', id),
                 retrySummary: () =>
                     retry('retrySummary', items[index]['id']! as String),
+                onDelete: () => deleteTranscript(items[index]),
               ),
             ),
         ],
@@ -733,12 +810,14 @@ class _TranscriptSummaryCard extends StatelessWidget {
     required this.time,
     required this.retryTranscription,
     required this.retrySummary,
+    required this.onDelete,
   });
 
   final Map<Object?, Object?> item;
   final String Function(int) time;
   final ValueChanged<String> retryTranscription;
   final VoidCallback retrySummary;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -785,6 +864,11 @@ class _TranscriptSummaryCard extends StatelessWidget {
                       ),
                     ],
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Delete transcript',
+                  onPressed: () => _confirmDelete(context),
+                  icon: const Icon(Icons.delete_outline),
                 ),
               ],
             ),
@@ -834,6 +918,36 @@ class _TranscriptSummaryCard extends StatelessWidget {
     } on Object {
       return null;
     }
+  }
+
+  Future<void> _confirmDelete(BuildContext context) async {
+    final segmentCount = _segments.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete transcript?'),
+        content: Text(
+          'This removes the local encrypted recording and its transcript'
+          '${segmentCount > 1 ? ' ($segmentCount segments)' : ''}. '
+          'This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) onDelete();
   }
 
   String? _string(Object? value) {

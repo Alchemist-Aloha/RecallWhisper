@@ -172,8 +172,8 @@ void main() {
     await tester.pump();
     expect(find.text('Summary is queued or running…'), findsOneWidget);
     expect(find.text('Stop summary'), findsOneWidget);
-    final button = tester.widget<OutlinedButton>(
-      find.widgetWithText(OutlinedButton, 'Stop summary'),
+    final button = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Stop summary'),
     );
     expect(button.onPressed, isNotNull);
     running = false;
@@ -553,5 +553,56 @@ void main() {
     await tester.tap(find.text('Transcripts'));
     await tester.pumpAndSettle();
     expect(find.text('Transcripts'), findsWidgets);
+  });
+
+  testWidgets('transcript delete requires confirmation and removes episode', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          calls.add(call.method);
+          if (call.method == 'timeline') {
+            return <Object>[
+              <String, Object?>{
+                'id': 'ep_1',
+                'isEpisode': true,
+                'startedAt': 0,
+                'summary': '{"summary":"Short summary."}',
+                'summaryState': 'COMPLETE',
+                'segments': <Object>[
+                  <String, Object?>{
+                    'id': 'segment-1',
+                    'startedAt': 0,
+                    'transcript': 'First spoken text.',
+                    'transcriptionState': 'COMPLETE',
+                  },
+                ],
+              },
+            ];
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+
+    // Cancel leaves the transcript untouched.
+    await tester.tap(find.byTooltip('Delete transcript'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete transcript?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete transcript?'), findsNothing);
+    expect(calls.contains('deleteEpisode'), isFalse);
+
+    // Confirming removes the episode and refreshes the timeline.
+    await tester.tap(find.byTooltip('Delete transcript'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    expect(
+      calls,
+      containsAllInOrder(<String>['deleteEpisode', 'timeline']),
+    );
   });
 }

@@ -333,6 +333,20 @@ class MainActivity : FlutterActivity() {
                     }
                     runOnUiThread { result.success(null) }
                 }
+                "deleteEpisode" -> databaseExecutor.execute {
+                    val id = call.argument<String>("id")!!
+                    val dao = RecorderDatabase.get(this).segments()
+                    dao.episodeSegments(id).forEach { link ->
+                        dao.byId(link.segmentId)?.let {
+                            java.io.File(it.filePath).delete()
+                            dao.delete(link.segmentId)
+                        }
+                    }
+                    dao.deleteEpisodeSegments(id)
+                    dao.deleteEpisode(id)
+                    dao.deleteOrphanTopics()
+                    runOnUiThread { result.success(null) }
+                }
                 "playSegment" -> databaseExecutor.execute {
                     val id = call.argument<String>("id")!!
                     val segment = RecorderDatabase.get(this).segments().byId(id)
@@ -384,6 +398,7 @@ class MainActivity : FlutterActivity() {
                     val episodes = dao.recentEpisodes().map { episode ->
                         mapOf(
                             "id" to episode.episodeId,
+                            "isEpisode" to true,
                             "startedAt" to episode.startedAtUtcMs,
                             "endedAt" to episode.endedAtUtcMs,
                             "summary" to episode.summaryJson,
@@ -396,6 +411,7 @@ class MainActivity : FlutterActivity() {
                     val pending = segments.filterNot { it.segmentId in linkedIds }.map {
                         mapOf(
                             "id" to it.segmentId,
+                            "isEpisode" to false,
                             "startedAt" to it.startedAtUtcMs,
                             "endedAt" to it.endedAtUtcMs,
                             "summary" to it.summaryJson,
