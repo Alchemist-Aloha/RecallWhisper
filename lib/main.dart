@@ -441,10 +441,8 @@ class _ButtonLabel extends StatelessWidget {
   final String text;
 
   @override
-  Widget build(BuildContext context) => FittedBox(
-    fit: BoxFit.scaleDown,
-    child: Text(text),
-  );
+  Widget build(BuildContext context) =>
+      FittedBox(fit: BoxFit.scaleDown, child: Text(text));
 }
 
 class _WorkflowBanner extends StatelessWidget {

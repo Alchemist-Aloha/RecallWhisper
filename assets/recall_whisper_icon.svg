@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1280" role="img" aria-labelledby="title">
+  <title id="title">RecallWhisper llama wearing headphones</title>
+
+  <rect width="1280" height="1280" fill="#000"/>
+  <path
+    fill="#fff"
+    d="M365 14h550c194 0 351 157 351 351v550c0 194-157 351-351 351H365c-194 0-351-157-351-351V365C14 171 171 14 365 14Z"/>
+
+  <!-- Headphone band and ear cups sit behind the llama. -->
+  <path
+    fill="none"
+    stroke="#111"
+    stroke-linecap="round"
+    stroke-width="58"
+    d="M322 596c15-157 132-245 318-245s303 88 318 245"/>
+  <path
+    fill="#111"
+    d="M307 558c-31 0-52 24-55 61l-5 104c-2 35 14 56 48 58l37-2c13-4 22-13 26-27l7-155c-3-13-9-23-18-30-10-6-22-9-40-9Z"/>
+  <path
+    fill="#111"
+    d="M973 558c31 0 52 24 55 61l5 104c2 35-14 56-48 58l-37-2c-13-4-22-13-26-27l-7-155c3-13 9-23 18-30 10-6 22-9 40-9Z"/>
+
+  <!-- Ears. -->
+  <path
+    fill="#fff"
+    stroke="#111"
+    stroke-linejoin="round"
+    stroke-width="34"
+    d="M408 525c-30-62-52-139-40-209 10-59 31-96 62-96 34 0 54 40 65 97 12 63 10 139-6 208-24 4-53 8-81 0Z"/>
+  <path
+    fill="#fff"
+    stroke="#111"
+    stroke-linejoin="round"
+    stroke-width="34"
+    d="M872 525c30-62 52-139 40-209-10-59-31-96-62-96-34 0-54 40-65 97-12 63-10 139 6 208 24 4 53 8 81 0Z"/>
+
+  <!-- Llama head and body. -->
+  <path
+    fill="#fff"
+    stroke="#111"
+    stroke-linejoin="round"
+    stroke-width="34"
+    d="M395 776c-18-39-15-99-6-154 7-46 31-78 70-93 13-6 27-8 42-7 1-33 28-59 61-59 20 0 39 8 52 23 12-34 44-54 79-54s64 20 76 54c14-15 32-23 52-23 33 0 59 26 61 59 15-1 29 1 42 7 39 15 63 47 70 93 9 55 12 115-6 154 15 40 19 78 8 112-9 30-8 52 3 81 12 33 4 66-5 102-7 34 4 69 10 103 7 34 8 64-2 92H360c-11-28-10-58-3-92 6-34 17-69 10-103-9-36-17-69-5-102 11-29 12-51 3-81-11-34-7-72 8-112Z"/>
+
+  <!-- Eyes, muzzle, and mouth. -->
+  <circle cx="487" cy="690" r="36" fill="#111"/>
+  <circle cx="793" cy="690" r="36" fill="#111"/>
+  <path
+    fill="#fff"
+    stroke="#111"
+    stroke-linejoin="round"
+    stroke-width="20"
+    d="M640 701c66 0 117 36 117 84s-51 82-117 82-117-34-117-82 51-84 117-84Z"/>
+  <path
+    fill="none"
+    stroke="#111"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="17"
+    d="m640 785-36-29m36 29 36-29m-36 29v44"/>
+</svg>

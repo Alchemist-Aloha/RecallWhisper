@@ -600,9 +600,6 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete'));
     await tester.pumpAndSettle();
-    expect(
-      calls,
-      containsAllInOrder(<String>['deleteEpisode', 'timeline']),
-    );
+    expect(calls, containsAllInOrder(<String>['deleteEpisode', 'timeline']));
   });
 }
