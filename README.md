@@ -1,7 +1,6 @@
 # RecallWhisper
 
 Private Android ambient capture with all durable data stored on the phone.
-There is no RecallWhisper backend service.
 
 ## Data flow
 
