@@ -8,7 +8,7 @@ on:
       - '**'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -71,3 +71,9 @@ jobs:
         with:
           name: recall-whisper-${{ github.ref_name }}
           path: build/app/outputs/flutter-apk/RecallWhisper-*.apk
+
+      - name: Attach APKs to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" build/app/outputs/flutter-apk/RecallWhisper-*.apk --clobber
