@@ -100,24 +100,24 @@ cd recallwhisper-llm
 curl -fL \
   'https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf?download=true' \
   -o models/Qwen3.5-4B-Q4_K_M.gguf
-
-printf 'LLAMA_API_KEY=%s\n' "$(openssl rand -hex 32)" > .env
-chmod 600 .env
 ```
 
-Create `compose.yaml`:
+Create `compose.yaml` in recallwhisper-llm/ with the following content, replacing `<SET_YOUR_LLAMA_API_KEY>` with a secure value:
 
 ```yaml
 services:
   llama:
-    image: ghcr.io/ggml-org/llama.cpp:server
+    # Select one of the following images based on your host hardware.
+    image: ghcr.io/ggml-org/llama.cpp:server    # CPU-only image
+    # image: ghcr.io/ggml-org/llama.cpp:server-cuda   # For NVIDIA GPU hosts
+    # image: ghcr.io/ggml-org/llama.cpp:server-vulkan # For AMD/Intel GPU hosts
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8181:8080"
     volumes:
       - ./models:/models:ro
     environment:
-      LLAMA_API_KEY: ${LLAMA_API_KEY}
+      LLAMA_API_KEY: <SET_YOUR_LLAMA_API_KEY>
     command:
       - --model
       - /models/Qwen3.5-4B-Q4_K_M.gguf
@@ -133,13 +133,21 @@ services:
       - "1"
       - --reasoning
       - "off"
+    # For AMD or Intel GPU hosts, uncomment the following lines to enable Vulkan GPU offload:
+    # devices:
+    # - /dev/null:/dev/null
+    # For NVIDIA GPU hosts, uncomment the following line to enable CUDA GPU offload:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - capabilities: [gpu]
 ```
 
 Start the service:
 
 ```sh
 docker compose up -d
-docker compose logs -f llama
 ```
 
 This uses llama.cpp’s server-only image, documented in the official
@@ -149,8 +157,7 @@ The `--alias` value becomes the model ID returned by `/v1/models`. Using
 [llama.cpp server reference](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
 for API-key, TLS, GPU-offload, context, and concurrency options.
 
-For an NVIDIA host, use `ghcr.io/ggml-org/llama.cpp:server-cuda`, add
-`gpus: all` to the service, and add `--n-gpu-layers 99` to `command`. Keep the
+For an GPU host, use `ghcr.io/ggml-org/llama.cpp:server-cuda` or `ghcr.io/ggml-org/llama.cpp:server-vulkan`. Keep the
 CPU image when portability matters more than generation speed.
 
 ### 3. Expose both APIs safely
@@ -186,7 +193,7 @@ untrusted networks.
 | Transcription token | Token from `openasr apikey create --name recallwhisper` |
 | Transcription model | `xasr-zh-en` |
 | Summarization URL | `https://llm.example.com/v1` |
-| Summarization token | `LLAMA_API_KEY` from `.env` |
+| Summarization token | `<SET_YOUR_LLAMA_API_KEY>` from `compose.yaml` |
 | Summarization model | `qwen3.5-4b` |
 | Summary language | `Same as transcript` or a specific language |
 
@@ -212,14 +219,6 @@ before enabling continuous processing.
 - **Container exits during startup:** check `docker compose logs llama`, confirm
   the GGUF path and permissions, and update the llama.cpp image because
   Qwen3.5 support requires a recent build.
-
-## Social preview
-
-The README image is also the repository social-preview asset:
-[`assets/recallwhisper-social-preview.png`](assets/recallwhisper-social-preview.png).
-It is 1280×640 PNG and under 1 MB. Repository administrators can upload it at
-**Settings → Social preview → Edit → Upload an image**, following
-[GitHub’s social-preview guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview).
 
 ## Build
 
