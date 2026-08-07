@@ -4,7 +4,7 @@
 
 # RecallWhisper
 
-Private Android ambient capture with all durable data stored on the phone.
+Private Android ambient voice capture and summarization with all durable data stored on the phone.
 
 ## Data flow
 
