@@ -41,7 +41,6 @@ jobs:
         run: flutter test
 
       - name: Prepare release signing
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -58,16 +57,17 @@ jobs:
             "$RUNNER_TEMP/recallwhisper.jks" \
             > android/key.properties
 
-      - name: Build debug APK
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        run: flutter build apk --debug
-
       - name: Build signed release APK
-        if: startsWith(github.ref, 'refs/tags/')
-        run: flutter build apk --release
+        run: flutter build apk --release --split-per-abi
+
+      - name: Rename release APKs
+        run: |
+          mv build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk build/app/outputs/flutter-apk/RecallWhisper-armeabi-v7a.apk
+          mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk build/app/outputs/flutter-apk/RecallWhisper-arm64-v8a.apk
+          mv build/app/outputs/flutter-apk/app-x86_64-release.apk build/app/outputs/flutter-apk/RecallWhisper-x86_64.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
           name: recall-whisper-${{ github.ref_name }}
-          path: build/app/outputs/flutter-apk/*.apk
+          path: build/app/outputs/flutter-apk/RecallWhisper-*.apk
