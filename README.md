@@ -4,7 +4,7 @@
 
 # RecallWhisper
 
-[简体中文](README.zh-CN.md)
+[中文](README.zh-CN.md)
 
 Private Android ambient voice capture and summarization with all durable data stored on the phone.
 
