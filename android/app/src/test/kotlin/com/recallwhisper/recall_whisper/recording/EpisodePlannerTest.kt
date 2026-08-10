@@ -1,6 +1,7 @@
 package com.recallwhisper.recall_whisper.recording
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EpisodePlannerTest {
@@ -35,6 +36,96 @@ class EpisodePlannerTest {
         )
 
         assertEquals(listOf(2, 1), groups.map(List<CaptureSegment>::size))
+    }
+
+    @Test
+    fun exactGapBoundaryKeepsSegmentsTogether() {
+        val groups = EpisodePlanner.group(
+            listOf(segment("a", 0, 60_000), segment("b", 120_000, 180_000)),
+            gapMs = 60_000,
+            maxDurationMs = 30 * 60_000,
+        )
+
+        assertEquals(1, groups.size)
+    }
+
+    @Test
+    fun gapOneMillisecondBeyondTheBoundarySplits() {
+        val groups = EpisodePlanner.group(
+            listOf(segment("a", 0, 60_000), segment("b", 120_001, 180_000)),
+            gapMs = 60_000,
+            maxDurationMs = 30 * 60_000,
+        )
+
+        assertEquals(2, groups.size)
+    }
+
+    @Test
+    fun exactMaximumDurationKeepsSegmentsTogether() {
+        val groups = EpisodePlanner.group(
+            listOf(segment("a", 0, 0), segment("b", 30 * 60_000, 30 * 60_000)),
+            gapMs = 30 * 60_000,
+            maxDurationMs = 30 * 60_000,
+        )
+
+        assertEquals(1, groups.size)
+    }
+
+    @Test
+    fun durationOneMillisecondBeyondTheBoundarySplits() {
+        val groups = EpisodePlanner.group(
+            listOf(
+                segment("a", 0, 0),
+                segment("b", 30 * 60_000, 30 * 60_000 + 1),
+            ),
+            gapMs = 30 * 60_000,
+            maxDurationMs = 30 * 60_000,
+        )
+
+        assertEquals(2, groups.size)
+    }
+
+    @Test
+    fun overlappingSegmentsStayInOneGroup() {
+        val groups = EpisodePlanner.group(
+            listOf(segment("a", 0, 100_000), segment("b", 50_000, 80_000)),
+            gapMs = 60_000,
+            maxDurationMs = 30 * 60_000,
+        )
+
+        assertEquals(1, groups.size)
+    }
+
+    @Test
+    fun emptyAndSingleSegmentInputsAreHandled() {
+        assertTrue(
+            EpisodePlanner.group(
+                emptyList(),
+                gapMs = 60_000,
+                maxDurationMs = 30 * 60_000,
+            ).isEmpty(),
+        )
+        assertEquals(
+            1,
+            EpisodePlanner.group(
+                listOf(segment("a", 0, 60_000)),
+                gapMs = 60_000,
+                maxDurationMs = 30 * 60_000,
+            ).size,
+        )
+    }
+
+    @Test
+    fun unsortedInputIsGroupedChronologically() {
+        val groups = EpisodePlanner.group(
+            listOf(segment("b", 120_000, 180_000), segment("a", 0, 60_000)),
+            gapMs = 60_000,
+            maxDurationMs = 30 * 60_000,
+        )
+
+        assertEquals(listOf(listOf("a", "b")), groups.map {
+            it.map(CaptureSegment::segmentId)
+        })
     }
 
     private fun segment(

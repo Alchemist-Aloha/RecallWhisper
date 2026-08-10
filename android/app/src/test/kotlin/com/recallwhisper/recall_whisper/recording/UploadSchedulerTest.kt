@@ -27,6 +27,18 @@ class UploadSchedulerTest {
     }
 
     @Test
+    fun cellularPreferenceAllowsAnyNetworkEvenInTheBackground() {
+        assertEquals(
+            NetworkType.CONNECTED,
+            ProcessingScheduler.requiredNetworkType(cellular = true, immediate = false),
+        )
+        assertEquals(
+            NetworkType.CONNECTED,
+            ProcessingScheduler.requiredNetworkType(cellular = true, immediate = true),
+        )
+    }
+
+    @Test
     fun retriesOnlyTemporaryFailuresAndStopsAfterFiveAttempts() {
         assertTrue(RetryPolicy.shouldRetry(IOException("offline"), attempt = 0))
         assertTrue(RetryPolicy.shouldRetry(ApiException(408, "timeout"), attempt = 0))
@@ -39,6 +51,31 @@ class UploadSchedulerTest {
         assertFalse(RetryPolicy.shouldRetry(ApiException(600, "invalid"), attempt = 0))
         assertFalse(RetryPolicy.shouldRetry(IllegalArgumentException("bad config"), attempt = 0))
         assertFalse(RetryPolicy.shouldRetry(IOException("offline"), attempt = 4))
+    }
+
+    @Test
+    fun theFifthAttemptNeverRetriesEvenTemporaryFailures() {
+        assertFalse(RetryPolicy.shouldRetry(ApiException(408, "timeout"), attempt = 4))
+        assertFalse(RetryPolicy.shouldRetry(ApiException(429, "busy"), attempt = 4))
+        assertFalse(RetryPolicy.shouldRetry(ApiException(500, "down"), attempt = 4))
+        assertFalse(RetryPolicy.shouldRetry(ApiException(503, "busy"), attempt = 4))
+    }
+
+    @Test
+    fun temporaryFailuresAreStillRetryableOnTheFourthAttempt() {
+        assertTrue(RetryPolicy.shouldRetry(ApiException(408, "timeout"), attempt = 3))
+        assertTrue(RetryPolicy.shouldRetry(ApiException(429, "busy"), attempt = 3))
+        assertTrue(RetryPolicy.shouldRetry(ApiException(503, "busy"), attempt = 3))
+        assertTrue(RetryPolicy.shouldRetry(IOException("offline"), attempt = 3))
+    }
+
+    @Test
+    fun otherProtocolErrorsAreNeverRetried() {
+        assertFalse(RetryPolicy.shouldRetry(ApiException(403, "forbidden"), attempt = 0))
+        assertFalse(RetryPolicy.shouldRetry(ApiException(404, "missing"), attempt = 0))
+        assertFalse(RetryPolicy.shouldRetry(ApiException(302, "redirect"), attempt = 0))
+        assertFalse(RetryPolicy.shouldRetry(ApiException(100, "continue"), attempt = 0))
+        assertFalse(RetryPolicy.shouldRetry(ApiException(204, "no content"), attempt = 0))
     }
 
     @Test

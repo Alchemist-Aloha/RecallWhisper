@@ -609,4 +609,226 @@ void main() {
     await tester.pumpAndSettle();
     expect(calls, containsAllInOrder(<String>['deleteEpisode', 'timeline']));
   });
+
+  testWidgets('recorder transcribe and summarize buttons drive the workflow', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          calls.add(call.method);
+          if (call.method == 'status') {
+            return <String, Object>{'state': 'STOPPED'};
+          }
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: false);
+    await tester.pumpWidget(const MaterialApp(home: RecorderPage()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transcribe'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Summarize'));
+    await tester.pumpAndSettle();
+    expect(
+      calls,
+      containsAllInOrder(<String>['transcribeNow', 'summarizeNow']),
+    );
+    expect(calls.where((method) => method == 'processingStatus'), hasLength(2));
+    expect(workflowActivity.value, (transcribing: false, summarizing: false));
+  });
+
+  testWidgets('recorder disables only the active workflow action', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'status') {
+            return <String, Object>{'state': 'STOPPED'};
+          }
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: true, summarizing: false);
+    await tester.pumpWidget(const MaterialApp(home: RecorderPage()));
+    await tester.pump();
+    final transcribing = tester.widget<TextButton>(
+      find.widgetWithText(TextButton, 'Transcribing…'),
+    );
+    expect(transcribing.onPressed, isNull);
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Summarize'))
+          .onPressed,
+      isNotNull,
+    );
+    workflowActivity.value = (transcribing: false, summarizing: true);
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Summarizing…'))
+          .onPressed,
+      isNull,
+    );
+    workflowActivity.value = (transcribing: false, summarizing: false);
+  });
+
+  testWidgets('workflow polling stops once status returns idle', (
+    tester,
+  ) async {
+    var statusCalls = 0;
+    var active = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'processingStatus') {
+            statusCalls++;
+            if (statusCalls >= 3) active = false;
+            return <String, Object>{
+              'transcribing': active,
+              'summarizing': active,
+            };
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pump();
+    await workflowActivity.refresh();
+    await tester.pump();
+    expect(statusCalls, 1);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(statusCalls, 2);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(statusCalls, 3);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
+    expect(statusCalls, 3);
+  });
+
+  testWidgets('workflow activity resets to idle when status polling fails', (
+    tester,
+  ) async {
+    var failing = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'processingStatus') {
+            if (failing) throw PlatformException(code: 'channel_unavailable');
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: true, summarizing: false);
+    await workflowActivity.refresh();
+    expect(workflowActivity.value, (transcribing: false, summarizing: false));
+    failing = false;
+    await workflowActivity.refresh();
+    expect(workflowActivity.value, (transcribing: false, summarizing: false));
+  });
+
+  testWidgets('recorder surfaces transcription channel failures', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          calls.add(call.method);
+          if (call.method == 'status') {
+            return <String, Object>{'state': 'STOPPED'};
+          }
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          if (call.method == 'transcribeNow') {
+            throw PlatformException(
+              code: 'work_failed',
+              message: 'Server down',
+            );
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: false);
+    await tester.pumpWidget(const MaterialApp(home: RecorderPage()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transcribe'));
+    await tester.pumpAndSettle();
+    expect(find.text('Server down'), findsOneWidget);
+    expect(
+      calls,
+      containsAllInOrder(<String>['transcribeNow', 'processingStatus']),
+    );
+    expect(workflowActivity.value, (transcribing: false, summarizing: false));
+  });
+
+  testWidgets('retry actions pass the exact episode and segment ids', (
+    tester,
+  ) async {
+    final arguments = <String, Object?>{};
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'timeline') {
+            return <Object>[
+              <String, Object?>{
+                'id': 'ep_1',
+                'isEpisode': true,
+                'startedAt': 0,
+                'transcript': null,
+                'summary': null,
+                'transcriptionState': 'FAILED',
+                'summaryState': 'FAILED',
+                'segments': <Object>[
+                  <String, Object?>{
+                    'id': 'segment-1',
+                    'startedAt': 0,
+                    'transcript': null,
+                    'transcriptionState': 'FAILED',
+                  },
+                ],
+              },
+            ];
+          }
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          if (call.method == 'retrySummary' ||
+              call.method == 'retryTranscription') {
+            arguments[call.method] = call.arguments;
+          }
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: false);
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Resubmit summary'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transcript'));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Resubmit transcription'));
+    await tester.pumpAndSettle();
+    expect(arguments['retrySummary'], <String, Object>{'id': 'ep_1'});
+    expect(arguments['retryTranscription'], <String, Object>{
+      'id': 'segment-1',
+    });
+  });
 }
