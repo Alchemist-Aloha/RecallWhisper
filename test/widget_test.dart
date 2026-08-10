@@ -120,6 +120,11 @@ void main() {
         });
     await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
     await tester.pumpAndSettle();
+    final scrollbar = tester.widget<Scrollbar>(find.byType(Scrollbar));
+    final listView = tester.widget<ListView>(find.byType(ListView));
+    expect(scrollbar.thumbVisibility, isTrue);
+    expect(scrollbar.interactive, isTrue);
+    expect(scrollbar.controller, same(listView.controller));
     expect(find.text('Short summary.'), findsOneWidget);
     expect(find.text('complete'), findsOneWidget);
     expect(find.text('2 segments'), findsOneWidget);
@@ -228,6 +233,8 @@ void main() {
   testWidgets('transcripts can retry all failed jobs and stop active jobs', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final calls = <String>[];
     var transcribing = true;
     var summarizing = true;
@@ -248,13 +255,13 @@ void main() {
     workflowActivity.value = (transcribing: true, summarizing: true);
     await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
     await tester.pump();
-    await tester.tap(find.text('Stop transcription'));
+    await tester.tap(find.text('Stop transcript'));
     await tester.pump();
     await tester.tap(find.text('Stop summary'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Retry failed transcripts'));
+    await tester.tap(find.text('Retry transcript'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Retry failed summaries'));
+    await tester.tap(find.text('Retry summary'));
     await tester.pumpAndSettle();
     expect(
       calls,
