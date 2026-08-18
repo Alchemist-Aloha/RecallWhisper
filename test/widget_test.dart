@@ -535,6 +535,66 @@ void main() {
     );
   });
 
+  testWidgets('settings stays usable when configuration loading fails', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'config') {
+            throw PlatformException(
+              code: 'config_unavailable',
+              message: 'Unable to load settings.',
+            );
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: SettingsPage()));
+    await tester.pumpAndSettle();
+    expect(find.text('Transcription server'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets('settings uses safe defaults for invalid configuration values', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'config') {
+            return <String, Object?>{
+              'cellular': 'true',
+              'allowHttp': null,
+              'trailingSilenceMs': 1000,
+              'episodeGapMinutes': 'invalid',
+              'episodeMaxMinutes': 120,
+              'transcriptionUrl': 42,
+              'transcriptionModel': false,
+            };
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: SettingsPage()));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('5 minutes between recordings'),
+      500,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('5 minutes between recordings'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('60 minutes'),
+      500,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('60 minutes'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('5 seconds before closing a recording'),
+      500,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('5 seconds before closing a recording'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
   testWidgets('bottom navigation exposes the three primary panels', (
     tester,
   ) async {

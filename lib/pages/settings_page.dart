@@ -26,6 +26,15 @@ class _SettingsPageState extends State<SettingsPage> {
   int episodeGapMinutes = 5;
   int episodeMaxMinutes = 30;
   bool loaded = false;
+  String _string(Object? value, String fallback) =>
+      value is String ? value : fallback;
+
+  bool _bool(Object? value, bool fallback) => value is bool ? value : fallback;
+
+  int _boundedInt(Object? value, int fallback, int min, int max) {
+    final candidate = value is num && value.isFinite ? value.round() : fallback;
+    return candidate.clamp(min, max).toInt();
+  }
 
   @override
   void initState() {
@@ -34,31 +43,60 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> load() async {
-    final config = await nativeCommands.invokeMapMethod<Object?, Object?>(
-      'config',
-    );
-    if (!mounted) return;
-    transcriptionUrl.text = config?['transcriptionUrl'] as String? ?? '';
-    transcriptionToken.text = config?['transcriptionToken'] as String? ?? '';
-    transcriptionModel.text =
-        config?['transcriptionModel'] as String? ?? 'whisper-1';
-    summarizationUrl.text = config?['summarizationUrl'] as String? ?? '';
-    summarizationToken.text = config?['summarizationToken'] as String? ?? '';
-    summarizationModel.text = config?['summarizationModel'] as String? ?? '';
-    summaryLanguage.text =
-        config?['summaryLanguage'] as String? ?? 'Same as transcript';
-    if (mounted) {
+    try {
+      final config = await nativeCommands.invokeMapMethod<Object?, Object?>(
+        'config',
+      );
+      if (!mounted) return;
+      transcriptionUrl.text = _string(config?['transcriptionUrl'], '');
+      transcriptionToken.text = _string(config?['transcriptionToken'], '');
+      transcriptionModel.text = _string(
+        config?['transcriptionModel'],
+        'whisper-1',
+      );
+      summarizationUrl.text = _string(config?['summarizationUrl'], '');
+      summarizationToken.text = _string(config?['summarizationToken'], '');
+      summarizationModel.text = _string(config?['summarizationModel'], '');
+      summaryLanguage.text = _string(
+        config?['summaryLanguage'],
+        'Same as transcript',
+      );
       setState(() {
-        cellular = config?['cellular'] as bool? ?? false;
-        allowHttp = config?['allowHttp'] as bool? ?? false;
-        trailingSilenceMs =
-            config?['trailingSilenceMs'] as int? ?? trailingSilenceMs;
-        episodeGapMinutes =
-            config?['episodeGapMinutes'] as int? ?? episodeGapMinutes;
-        episodeMaxMinutes =
-            config?['episodeMaxMinutes'] as int? ?? episodeMaxMinutes;
+        cellular = _bool(config?['cellular'], false);
+        allowHttp = _bool(config?['allowHttp'], false);
+        trailingSilenceMs = _boundedInt(
+          config?['trailingSilenceMs'],
+          30000,
+          5000,
+          60000,
+        );
+        episodeGapMinutes = _boundedInt(config?['episodeGapMinutes'], 5, 3, 10);
+        episodeMaxMinutes = _boundedInt(
+          config?['episodeMaxMinutes'],
+          30,
+          10,
+          60,
+        );
         loaded = true;
       });
+    } on Object {
+      if (mounted) {
+        transcriptionUrl.text = '';
+        transcriptionToken.text = '';
+        transcriptionModel.text = 'whisper-1';
+        summarizationUrl.text = '';
+        summarizationToken.text = '';
+        summarizationModel.text = '';
+        summaryLanguage.text = 'Same as transcript';
+        setState(() {
+          cellular = false;
+          allowHttp = false;
+          trailingSilenceMs = 30000;
+          episodeGapMinutes = 5;
+          episodeMaxMinutes = 30;
+          loaded = true;
+        });
+      }
     }
   }
 
