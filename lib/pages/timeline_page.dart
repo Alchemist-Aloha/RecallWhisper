@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../channels.dart';
 import '../format.dart';
+import '../widgets/copyable_text.dart';
 import '../widgets/workflow.dart';
 import 'search_page.dart';
 import 'settings_page.dart';
@@ -172,67 +173,91 @@ class _TimelinePageState extends State<TimelinePage> {
                             ],
                           ),
                           const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
+                          Column(
                             children: [
-                              Tooltip(
-                                message: activity.transcribing
-                                    ? 'Stop transcription'
-                                    : 'Transcribe pending',
-                                child: FilledButton.icon(
-                                  onPressed: () => activity.transcribing
-                                      ? stop('stopTranscription')
-                                      : run('transcribeNow'),
-                                  icon: Icon(
-                                    activity.transcribing
-                                        ? Icons.stop
-                                        : Icons.graphic_eq,
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Tooltip(
+                                      message: activity.transcribing
+                                          ? 'Stop transcription'
+                                          : 'Transcribe pending',
+                                      child: FilledButton.icon(
+                                        onPressed: () => activity.transcribing
+                                            ? stop('stopTranscription')
+                                            : run('transcribeNow'),
+                                        icon: Icon(
+                                          activity.transcribing
+                                              ? Icons.stop
+                                              : Icons.graphic_eq,
+                                        ),
+                                        label: Text(
+                                          activity.transcribing
+                                              ? 'Stop transcript'
+                                              : 'Transcribe',
+                                        ),
+                                      ),
+                                    ),
                                   ),
-                                  label: Text(
-                                    activity.transcribing
-                                        ? 'Stop transcript'
-                                        : 'Transcribe',
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Tooltip(
+                                      message: 'Retry failed transcripts',
+                                      child: OutlinedButton.icon(
+                                        onPressed: () => retryAll(
+                                          'retryFailedTranscriptions',
+                                        ),
+                                        icon: const Icon(
+                                          Icons.refresh,
+                                          size: 18,
+                                        ),
+                                        label: const Text('Retry'),
+                                      ),
+                                    ),
                                   ),
-                                ),
+                                ],
                               ),
-                              Tooltip(
-                                message: activity.summarizing
-                                    ? 'Stop summary'
-                                    : 'Summarize pending',
-                                child: FilledButton.tonalIcon(
-                                  onPressed: () => activity.summarizing
-                                      ? stop('stopSummary')
-                                      : run('summarizeNow'),
-                                  icon: Icon(
-                                    activity.summarizing
-                                        ? Icons.stop
-                                        : Icons.summarize_outlined,
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Tooltip(
+                                      message: activity.summarizing
+                                          ? 'Stop summary'
+                                          : 'Summarize pending',
+                                      child: FilledButton.tonalIcon(
+                                        onPressed: () => activity.summarizing
+                                            ? stop('stopSummary')
+                                            : run('summarizeNow'),
+                                        icon: Icon(
+                                          activity.summarizing
+                                              ? Icons.stop
+                                              : Icons.summarize_outlined,
+                                        ),
+                                        label: Text(
+                                          activity.summarizing
+                                              ? 'Stop summary'
+                                              : 'Summarize',
+                                        ),
+                                      ),
+                                    ),
                                   ),
-                                  label: Text(
-                                    activity.summarizing
-                                        ? 'Stop summary'
-                                        : 'Summarize',
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Tooltip(
+                                      message: 'Retry failed summaries',
+                                      child: OutlinedButton.icon(
+                                        onPressed: () =>
+                                            retryAll('retryFailedSummaries'),
+                                        icon: const Icon(
+                                          Icons.refresh,
+                                          size: 18,
+                                        ),
+                                        label: const Text('Retry'),
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ),
-                              Tooltip(
-                                message: 'Retry failed transcripts',
-                                child: OutlinedButton.icon(
-                                  onPressed: () =>
-                                      retryAll('retryFailedTranscriptions'),
-                                  icon: const Icon(Icons.refresh, size: 18),
-                                  label: const Text('Retry transcript'),
-                                ),
-                              ),
-                              Tooltip(
-                                message: 'Retry failed summaries',
-                                child: OutlinedButton.icon(
-                                  onPressed: () =>
-                                      retryAll('retryFailedSummaries'),
-                                  icon: const Icon(Icons.refresh, size: 18),
-                                  label: const Text('Retry summary'),
-                                ),
+                                ],
                               ),
                             ],
                           ),
@@ -516,10 +541,11 @@ class _TranscriptSegment extends StatelessWidget {
           label: segment['transcriptionState'] as String? ?? 'PENDING',
         ),
         const SizedBox(height: 6),
-        SelectableText(
+        CopyableText(
           segment['transcriptionState'] == 'EMPTY'
               ? 'No human voice detected.'
               : segment['transcript'] as String? ?? 'No transcript yet.',
+          label: 'Transcript',
         ),
         if (segment['transcriptionError'] case final String message)
           _ErrorText(message: message),
@@ -549,7 +575,9 @@ class _SummaryContent extends StatelessWidget {
     if (value == null || value!.trim().isEmpty) {
       return const Text('No summary yet.');
     }
-    if (parsed == null) return SelectableText(value!);
+    if (parsed == null) {
+      return CopyableText(value!, label: 'Summary');
+    }
     final summary = _text(parsed!['summary']);
     final tags = <String>{
       ..._strings(parsed!['keywords']),
@@ -560,8 +588,9 @@ class _SummaryContent extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (summary != null)
-          SelectableText(
+          CopyableText(
             summary,
+            label: 'Summary',
             style: Theme.of(
               context,
             ).textTheme.bodyLarge?.copyWith(height: 1.45),

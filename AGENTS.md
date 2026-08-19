@@ -18,7 +18,10 @@ Treat `SPEC.md` section 0 as the authoritative description of the current archit
 - `flutter test` runs Flutter widget tests.
 - `./android/gradlew -p android testDebugUnitTest` runs native JUnit 4 tests.
 - `./android/gradlew -p android testDebugUnitTest assembleDebug` runs native tests and builds the debug APK.
+- `flutter build apk --split-per-abi` builds the three ABI-specific release APKs.
 - `dart format lib test` formats Dart sources and tests.
+
+After every successful implementation, run `flutter build apk --split-per-abi` from the user's active checkout and branch. Do not report the work complete unless all three ABI artifacts (`armeabi-v7a`, `arm64-v8a`, and `x86_64`) build successfully, or clearly report the build blocker.
 
 ## Coding Style & Naming Conventions
 

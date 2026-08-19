@@ -90,6 +90,14 @@ void main() {
   testWidgets('timeline separates transcription and summary states', (
     tester,
   ) async {
+    String? clipboardText;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboardText = (call.arguments as Map)['text'] as String;
+          }
+          return null;
+        });
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(nativeCommands, (call) async {
           if (call.method == 'timeline') {
@@ -126,12 +134,21 @@ void main() {
     expect(scrollbar.interactive, isTrue);
     expect(scrollbar.controller, same(listView.controller));
     expect(find.text('Short summary.'), findsOneWidget);
+    await tester.tap(find.byTooltip('Copy Summary'));
+    await tester.pumpAndSettle();
+    expect(clipboardText, 'Short summary.');
+    expect(find.text('Summary copied'), findsOneWidget);
     expect(find.text('complete'), findsOneWidget);
     expect(find.text('2 segments'), findsOneWidget);
     await tester.tap(find.text('Transcript'));
     await tester.pumpAndSettle();
     expect(find.text('First spoken text.'), findsOneWidget);
     expect(find.text('Second spoken text.'), findsOneWidget);
+    await tester.ensureVisible(find.byTooltip('Copy Transcript').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Copy Transcript').first);
+    await tester.pumpAndSettle();
+    expect(clipboardText, 'First spoken text.');
   });
 
   testWidgets('timeline does not render an empty summary as content', (
@@ -255,13 +272,27 @@ void main() {
     workflowActivity.value = (transcribing: true, summarizing: true);
     await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
     await tester.pump();
+    final transcriptRetry = find.byTooltip('Retry failed transcripts');
+    final summaryRetry = find.byTooltip('Retry failed summaries');
+    expect(
+      tester.getCenter(find.text('Stop transcript')).dy,
+      tester.getCenter(transcriptRetry).dy,
+    );
+    expect(
+      tester.getCenter(find.text('Stop summary')).dy,
+      tester.getCenter(summaryRetry).dy,
+    );
+    expect(
+      tester.getCenter(find.text('Stop transcript')).dy,
+      lessThan(tester.getCenter(find.text('Stop summary')).dy),
+    );
     await tester.tap(find.text('Stop transcript'));
     await tester.pump();
     await tester.tap(find.text('Stop summary'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Retry transcript'));
+    await tester.tap(transcriptRetry);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Retry summary'));
+    await tester.tap(summaryRetry);
     await tester.pumpAndSettle();
     expect(
       calls,

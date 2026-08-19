@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../channels.dart';
 import '../format.dart';
+import '../widgets/copyable_text.dart';
 import '../widgets/workflow.dart';
 import 'search_page.dart';
 import 'settings_page.dart';
@@ -117,8 +118,9 @@ class _TopicsPageState extends State<TopicsPage> {
                 children: [
                   Text(topic['description'] as String),
                   const SizedBox(height: 8),
-                  Text(
+                  CopyableText(
                     topic['currentSummary'] as String,
+                    label: 'Summary',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   const Divider(height: 24),
@@ -169,7 +171,10 @@ class _EpisodeTile extends StatelessWidget {
             style: Theme.of(context).textTheme.labelMedium,
           ),
           const SizedBox(height: 4),
-          SelectableText(_episodeSummary(episode['summary'] as String)),
+          CopyableText(
+            _episodeSummary(episode['summary'] as String),
+            label: 'Summary',
+          ),
         ],
       ),
     );
