@@ -265,6 +265,23 @@ class SummaryWorker(context: Context, parameters: WorkerParameters) :
                         )
                     }
                 }
+                runCatching {
+                    TodoExtractor.extract(result.toString()).forEach { item ->
+                        if (dao.countTodo(episodeId, item) == 0) {
+                            dao.insertTodo(
+                                TodoItem(
+                                    todoId = "todo_" + UUID.randomUUID(),
+                                    text = item,
+                                    createdAtUtcMs = now(),
+                                    sourceEpisodeId = episodeId,
+                                    sourceTitle = localTitle,
+                                ),
+                            )
+                        }
+                    }
+                }.onFailure { error ->
+                    DebugLog.error(applicationContext, "Todo extraction failed", error)
+                }
                 DebugLog.info(applicationContext, "Summary $episodeId complete")
             } catch (error: Exception) {
                 if (isStopped) break

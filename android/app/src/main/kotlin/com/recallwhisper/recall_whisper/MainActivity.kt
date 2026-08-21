@@ -15,6 +15,8 @@ import com.recallwhisper.recall_whisper.recording.DirectApiClient
 import com.recallwhisper.recall_whisper.recording.DataExporter
 import com.recallwhisper.recall_whisper.recording.DebugLog
 import com.recallwhisper.recall_whisper.recording.ProcessingScheduler
+import com.recallwhisper.recall_whisper.recording.TodoExtractor
+import com.recallwhisper.recall_whisper.recording.TodoItem
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -461,6 +463,71 @@ class MainActivity : FlutterActivity() {
                     }
                     runOnUiThread { result.success(values) }
                 }
+                "todos" -> databaseExecutor.execute {
+                    val values = RecorderDatabase.get(this).segments().todos().map(::todoMap)
+                    runOnUiThread { result.success(values) }
+                }
+                "addTodo" -> databaseExecutor.execute {
+                    val dao = RecorderDatabase.get(this).segments()
+                    val text = ((call.arguments as Map<*, *>)["text"] as String).trim()
+                    if (!text.isBlank()) {
+                        dao.insertTodo(
+                            TodoItem(
+                                todoId = "todo_" + java.util.UUID.randomUUID(),
+                                text = text,
+                                createdAtUtcMs = System.currentTimeMillis(),
+                            ),
+                        )
+                    }
+                    runOnUiThread { result.success(dao.todos().map(::todoMap)) }
+                }
+                "setTodoCompleted" -> databaseExecutor.execute {
+                    runCatching {
+                        val dao = RecorderDatabase.get(this).segments()
+                        dao.setTodoCompleted(
+                            call.argument<String>("id")!!,
+                            call.argument<Boolean>("completed")!!,
+                            System.currentTimeMillis(),
+                        )
+                        dao.todos().map(::todoMap)
+                    }.onSuccess { values ->
+                        runOnUiThread { result.success(values) }
+                    }.onFailure { error ->
+                        runOnUiThread {
+                            result.error(
+                                "todo_update_failed",
+                                error.message ?: "Could not update this todo.",
+                                null,
+                            )
+                        }
+                    }
+                }
+                "deleteTodo" -> databaseExecutor.execute {
+                    val dao = RecorderDatabase.get(this).segments()
+                    dao.deleteTodo(call.argument<String>("id")!!)
+                    runOnUiThread { result.success(dao.todos().map(::todoMap)) }
+                }
+                "extractTodos" -> databaseExecutor.execute {
+                    val dao = RecorderDatabase.get(this).segments()
+                    var inserted = 0
+                    dao.recentEpisodes(Int.MAX_VALUE).forEach { episode ->
+                        TodoExtractor.extract(episode.summaryJson).forEach { item ->
+                            if (dao.countTodo(episode.episodeId, item) == 0) {
+                                dao.insertTodo(
+                                    TodoItem(
+                                        todoId = "todo_" + java.util.UUID.randomUUID(),
+                                        text = item,
+                                        createdAtUtcMs = System.currentTimeMillis(),
+                                        sourceEpisodeId = episode.episodeId,
+                                        sourceTitle = episode.localTitle,
+                                    ),
+                                )
+                                inserted += 1
+                            }
+                        }
+                    }
+                    runOnUiThread { result.success(inserted) }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -496,6 +563,16 @@ class MainActivity : FlutterActivity() {
         "transcript" to segment.transcriptText,
         "transcriptionState" to segment.transcriptionState,
         "transcriptionError" to segment.transcriptionError,
+    )
+
+    private fun todoMap(it: TodoItem) = mapOf(
+        "id" to it.todoId,
+        "text" to it.text,
+        "completed" to it.completed,
+        "createdAt" to it.createdAtUtcMs,
+        "completedAt" to it.completedAtUtcMs,
+        "sourceEpisodeId" to it.sourceEpisodeId,
+        "sourceTitle" to it.sourceTitle,
     )
 
     private fun startRecorder(result: MethodChannel.Result) {

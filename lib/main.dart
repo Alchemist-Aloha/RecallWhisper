@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'channels.dart';
 import 'pages/recorder_page.dart';
 import 'pages/timeline_page.dart';
+import 'pages/todos_page.dart';
 import 'pages/topics_page.dart';
 
 export 'channels.dart';
@@ -12,6 +13,7 @@ export 'pages/recorder_page.dart';
 export 'pages/search_page.dart';
 export 'pages/settings_page.dart';
 export 'pages/timeline_page.dart';
+export 'pages/todos_page.dart';
 export 'pages/topics_page.dart';
 
 void main() => runApp(const RecallWhisperApp());
@@ -70,7 +72,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     body: switch (index) {
       0 => const RecorderPage(),
       1 => const TimelinePage(),
-      _ => const TopicsPage(),
+      2 => const TopicsPage(),
+      _ => const TodosPage(),
     },
     bottomNavigationBar: NavigationBar(
       selectedIndex: index,
@@ -91,6 +94,11 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
           icon: Icon(Icons.topic_outlined),
           selectedIcon: Icon(Icons.topic),
           label: 'Topics',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.checklist_outlined),
+          selectedIcon: Icon(Icons.checklist),
+          label: 'Todos',
         ),
       ],
     ),

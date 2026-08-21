@@ -923,6 +923,243 @@ void main() {
     });
   });
 
+  List<Map<String, Object?>> seededTodos() => <Map<String, Object?>>[
+    <String, Object?>{
+      'id': 'todo_1',
+      'text': 'Send weekly report',
+      'completed': true,
+      'createdAt': 100,
+      'completedAt': 200,
+      'sourceEpisodeId': 'ep_1',
+      'sourceTitle': 'Weekly sync',
+    },
+    <String, Object?>{
+      'id': 'todo_2',
+      'text': 'Draft launch email',
+      'completed': false,
+      'createdAt': 300,
+      'completedAt': null,
+      'sourceEpisodeId': null,
+      'sourceTitle': null,
+    },
+  ];
+
+  Future<void> Function(MethodCall) todoStoreMutator(
+    List<Map<String, Object?>> store,
+    Map<String, Object?> calls,
+  ) {
+    Future<Object?>? handle(MethodCall call) {
+      switch (call.method) {
+        case 'todos':
+          return Future.value(store);
+        case 'addTodo':
+          final text = (call.arguments as Map)['text'] as String;
+          calls['addTodo'] = text;
+          store.insert(0, <String, Object?>{
+            'id': 'todo_new',
+            'text': text,
+            'completed': false,
+            'createdAt': 400,
+            'completedAt': null,
+            'sourceEpisodeId': null,
+            'sourceTitle': null,
+          });
+          return Future.value(store);
+        case 'setTodoCompleted':
+          final arguments = call.arguments as Map;
+          calls['setTodoCompleted'] = Map<String, Object?>.from(arguments);
+          for (final todo in store) {
+            if (todo['id'] == arguments['id']) {
+              todo['completed'] = arguments['completed'] as bool;
+            }
+          }
+          return Future.value(store);
+        case 'deleteTodo':
+          final id = (call.arguments as Map)['id'] as String;
+          calls['deleteTodo'] = id;
+          store.removeWhere((todo) => todo['id'] == id);
+          return Future.value(store);
+        case 'extractTodos':
+          calls['extractTodos'] = true;
+          return Future.value(2);
+      }
+      return null;
+    }
+
+    return (call) async => await handle(call);
+  }
+
+  testWidgets('todos page lists items and toggles completion', (tester) async {
+    final store = seededTodos();
+    final calls = <String, Object?>{};
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          nativeCommands,
+          todoStoreMutator(store, calls),
+        );
+    await tester.pumpWidget(const MaterialApp(home: TodosPage()));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Send weekly report'), findsOneWidget);
+    expect(find.text('From: Weekly sync'), findsOneWidget);
+    expect(find.text('Draft launch email'), findsOneWidget);
+
+    final openTile = find.widgetWithText(
+      CheckboxListTile,
+      'Draft launch email',
+    );
+    Checkbox checkboxOf(Finder tile) => tester.widget<Checkbox>(
+      find.descendant(of: tile, matching: find.byType(Checkbox)),
+    );
+    expect(checkboxOf(openTile).value, isFalse);
+
+    await tester.tap(
+      find.descendant(of: openTile, matching: find.byType(Checkbox)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(calls['setTodoCompleted'], <String, Object?>{
+      'id': 'todo_2',
+      'completed': true,
+    });
+    expect(checkboxOf(openTile).value, isTrue);
+  });
+
+  testWidgets('todos page survives a failed completion update', (tester) async {
+    final store = seededTodos();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'todos') return store;
+          if (call.method == 'setTodoCompleted') {
+            throw PlatformException(
+              code: 'todo_update_failed',
+              message: 'Could not update this todo.',
+            );
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TodosPage()));
+    await tester.pumpAndSettle();
+
+    final checkbox = find.descendant(
+      of: find.widgetWithText(CheckboxListTile, 'Draft launch email'),
+      matching: find.byType(Checkbox),
+    );
+    await tester.tap(checkbox);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(TodosPage), findsOneWidget);
+    expect(find.text('Could not update this todo.'), findsOneWidget);
+  });
+
+  testWidgets('todos page adds an item via dialog', (tester) async {
+    final store = seededTodos();
+    final calls = <String, Object?>{};
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          nativeCommands,
+          todoStoreMutator(store, calls),
+        );
+    await tester.pumpWidget(const MaterialApp(home: TodosPage()));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Add todo'));
+    await tester.pumpAndSettle();
+    final addButton = find.widgetWithText(FilledButton, 'Add');
+    expect(
+      tester.widget<FilledButton>(addButton).onPressed,
+      isNull,
+      reason: 'Add must stay disabled while the task text is blank.',
+    );
+
+    await tester.enterText(find.byType(TextFormField), 'Ship release notes');
+    await tester.pumpAndSettle();
+    expect(tester.widget<FilledButton>(addButton).onPressed, isNotNull);
+
+    await tester.tap(addButton);
+    await tester.pumpAndSettle();
+
+    expect(calls['addTodo'], 'Ship release notes');
+    expect(find.text('Ship release notes'), findsOneWidget);
+  });
+
+  testWidgets('todos page deletes an item', (tester) async {
+    final store = seededTodos();
+    final calls = <String, Object?>{};
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          nativeCommands,
+          todoStoreMutator(store, calls),
+        );
+    await tester.pumpWidget(const MaterialApp(home: TodosPage()));
+    await tester.pumpAndSettle();
+
+    final doneTile = find.widgetWithText(
+      CheckboxListTile,
+      'Send weekly report',
+    );
+    await tester.tap(
+      find.descendant(of: doneTile, matching: find.byTooltip('Delete')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(calls['deleteTodo'], 'todo_1');
+    expect(find.text('Send weekly report'), findsNothing);
+    expect(find.text('Draft launch email'), findsOneWidget);
+  });
+
+  testWidgets('todos page extracts action items from summaries', (
+    tester,
+  ) async {
+    final store = seededTodos();
+    final calls = <String, Object?>{};
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          nativeCommands,
+          todoStoreMutator(store, calls),
+        );
+    await tester.pumpWidget(const MaterialApp(home: TodosPage()));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Extract from summaries'));
+    await tester.pumpAndSettle();
+
+    expect(calls['extractTodos'], isTrue);
+    expect(find.text('Added 2 action items.'), findsOneWidget);
+  });
+
+  testWidgets('main shell shows todos tab', (tester) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'status') {
+            return <String, Object>{'state': 'STOPPED'};
+          }
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          if (call.method == 'todos') return <Object>[];
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: false);
+    await tester.pumpWidget(const RecallWhisperApp());
+    await tester.pumpAndSettle();
+
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Todos'), findsOneWidget);
+
+    await tester.tap(find.text('Todos'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('No todos yet.'), findsOneWidget);
+    expect(
+      find.text('Extract action items from summaries or add your own.'),
+      findsOneWidget,
+    );
+  });
+
   List<Map<String, Object?>> twoSessionTimeline() => <Map<String, Object?>>[
     <String, Object?>{
       'id': 'ep_2',

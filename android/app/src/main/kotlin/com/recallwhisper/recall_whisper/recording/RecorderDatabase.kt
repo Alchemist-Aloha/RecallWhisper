@@ -88,6 +88,17 @@ data class EpisodeSegment(
     val sequenceNumber: Int,
 )
 
+@Entity(tableName = "todo_item")
+data class TodoItem(
+    @PrimaryKey val todoId: String,
+    val text: String,
+    val completed: Boolean = false,
+    val createdAtUtcMs: Long,
+    val completedAtUtcMs: Long? = null,
+    val sourceEpisodeId: String? = null,
+    val sourceTitle: String? = null,
+)
+
 @Dao
 interface SegmentDao {
     @Insert
@@ -232,11 +243,35 @@ interface SegmentDao {
         (SELECT DISTINCT topicId FROM topic_episode)""",
     )
     fun deleteOrphanTopics()
+
+    @Query("SELECT * FROM todo_item ORDER BY completed ASC, createdAtUtcMs DESC")
+    fun todos(): List<TodoItem>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertTodo(todo: TodoItem)
+
+    @Query("""UPDATE todo_item SET completed = :completed,
+        completedAtUtcMs = CASE WHEN :completed THEN :now ELSE NULL END
+        WHERE todoId = :id""")
+    fun setTodoCompleted(id: String, completed: Boolean, now: Long): Int
+
+    @Query("DELETE FROM todo_item WHERE todoId = :id")
+    fun deleteTodo(id: String)
+
+    @Query("""SELECT COUNT(*) FROM todo_item WHERE sourceEpisodeId = :episodeId
+        AND LOWER(TRIM(text)) = LOWER(TRIM(:text))""")
+    fun countTodo(episodeId: String, text: String): Int
 }
 
 @Database(
-    entities = [CaptureSegment::class, Topic::class, TopicEpisode::class, EpisodeSegment::class],
-    version = 5,
+    entities = [
+        CaptureSegment::class,
+        Topic::class,
+        TopicEpisode::class,
+        EpisodeSegment::class,
+        TodoItem::class,
+    ],
+    version = 6,
     exportSchema = false,
 )
 abstract class RecorderDatabase : RoomDatabase() {
@@ -250,7 +285,13 @@ abstract class RecorderDatabase : RoomDatabase() {
                 context.applicationContext,
                 RecorderDatabase::class.java,
                 "recorder.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            ).addMigrations(
+            MIGRATION_1_2,
+            MIGRATION_2_3,
+            MIGRATION_3_4,
+            MIGRATION_4_5,
+            MIGRATION_5_6,
+        )
                 .build().also { instance = it }
         }
 
@@ -319,6 +360,23 @@ abstract class RecorderDatabase : RoomDatabase() {
                         `segmentId` TEXT NOT NULL,
                         `sequenceNumber` INTEGER NOT NULL,
                         PRIMARY KEY(`episodeId`, `segmentId`)
+                    )""",
+                )
+            }
+        }
+
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS `todo_item` (
+                        `todoId` TEXT NOT NULL,
+                        `text` TEXT NOT NULL,
+                        `completed` INTEGER NOT NULL,
+                        `createdAtUtcMs` INTEGER NOT NULL,
+                        `completedAtUtcMs` INTEGER,
+                        `sourceEpisodeId` TEXT,
+                        `sourceTitle` TEXT,
+                        PRIMARY KEY(`todoId`)
                     )""",
                 )
             }
