@@ -922,4 +922,178 @@ void main() {
       'id': 'segment-1',
     });
   });
+
+  List<Map<String, Object?>> twoSessionTimeline() => <Map<String, Object?>>[
+    <String, Object?>{
+      'id': 'ep_2',
+      'isEpisode': true,
+      'startedAt': 2000,
+      'endedAt': 3000,
+      'summary':
+          '{"local_title":"Second session","summary":"Second summary text.",'
+          '"keywords":["alpha"],"action_items":[{"task":"Follow up"}]}',
+      'summaryState': 'COMPLETE',
+      'segments': <Object>[
+        <String, Object?>{
+          'id': 'segment-2',
+          'startedAt': 2000,
+          'transcript': 'Second transcript body.',
+          'transcriptionState': 'COMPLETE',
+        },
+      ],
+    },
+    <String, Object?>{
+      'id': 'ep_1',
+      'isEpisode': true,
+      'startedAt': 1000,
+      'summary': '{"local_title":"First session","summary":"First summary."}',
+      'summaryState': 'COMPLETE',
+      'segments': <Object>[
+        <String, Object?>{
+          'id': 'segment-1',
+          'startedAt': 1000,
+          'transcript': 'First transcript body.',
+          'transcriptionState': 'COMPLETE',
+        },
+      ],
+    },
+  ];
+
+  void useTallTestSurface(WidgetTester tester) {
+    tester.view.physicalSize = const Size(1080, 3200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+  }
+
+  testWidgets('long press enters selection and checkboxes toggle sessions', (
+    tester,
+  ) async {
+    useTallTestSurface(tester);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'timeline') return twoSessionTimeline();
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Transcripts'), findsOneWidget);
+    await tester.longPress(find.text('First session'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNWidgets(2));
+    expect(
+      tester
+          .widgetList<Checkbox>(find.byType(Checkbox))
+          .where((checkbox) => checkbox.value == true)
+          .length,
+      1,
+    );
+
+    await tester.tap(find.text('Second session'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+
+    // Every session is selected, so the app bar toggles to deselect-all.
+    expect(find.byTooltip('Deselect all'), findsOneWidget);
+    await tester.tap(find.byTooltip('Deselect all'));
+    await tester.pumpAndSettle();
+    expect(find.text('0 selected'), findsOneWidget);
+    await tester.tap(find.byTooltip('Select all'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Exit selection'));
+    await tester.pumpAndSettle();
+    expect(find.text('Transcripts'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNothing);
+    expect(find.byTooltip('Delete transcript'), findsNWidgets(2));
+  });
+
+  testWidgets('export selection writes markdown via exportDocument', (
+    tester,
+  ) async {
+    useTallTestSurface(tester);
+    Map<Object?, Object?>? exported;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'timeline') return twoSessionTimeline();
+          if (call.method == 'exportDocument') {
+            exported = call.arguments as Map<Object?, Object?>;
+            return null;
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('First session'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Select all'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Export .md'));
+    await tester.pumpAndSettle();
+
+    expect(exported, isNotNull);
+    expect(
+      exported!['fileName'],
+      matches(RegExp(r'^recallwhisper-\d{4}-\d{2}-\d{2}\.md$')),
+    );
+    expect(exported!['mimeType'], 'text/markdown');
+    final content = exported!['content']! as String;
+    expect(
+      content.indexOf('# First session'),
+      lessThan(content.indexOf('# Second session')),
+    );
+    expect(content, contains('First summary.'));
+    expect(content, contains('## Transcript'));
+    expect(content, contains('### '));
+    expect(content, contains('First transcript body.'));
+    expect(content, contains('Second transcript body.'));
+    expect(content, contains('- Follow up'));
+    expect(content, contains('**Keywords:** alpha'));
+    expect(find.text('Markdown export saved'), findsOneWidget);
+  });
+
+  testWidgets('delete selection confirms once and removes every session', (
+    tester,
+  ) async {
+    useTallTestSurface(tester);
+    final calls = <String>[];
+    final deletedIds = <Object?>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          calls.add(call.method);
+          if (call.method == 'timeline') return twoSessionTimeline();
+          if (call.method == 'deleteEpisode') {
+            deletedIds.add((call.arguments as Map<Object?, Object?>)['id']);
+            return null;
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('First session'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Second session'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Delete 2 sessions?'), findsOneWidget);
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Delete'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(deletedIds, containsAll(<Object?>['ep_1', 'ep_2']));
+    expect(calls.where((method) => method == 'deleteEpisode'), hasLength(2));
+    expect(calls.last, 'timeline');
+    expect(find.text('Deleted 2 sessions'), findsOneWidget);
+    expect(find.text('2 selected'), findsNothing);
+  });
 }

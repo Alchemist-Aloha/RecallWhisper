@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../channels.dart';
 import '../format.dart';
+import '../markdown_export.dart';
 import '../widgets/copyable_text.dart';
 import '../widgets/workflow.dart';
 import 'search_page.dart';
@@ -22,6 +23,8 @@ class _TimelinePageState extends State<TimelinePage> {
   String? error;
   int _refreshRequest = 0;
   final _scrollController = ScrollController();
+  bool _selecting = false;
+  final Set<String> _selectedIds = {};
 
   @override
   void initState() {
@@ -107,205 +110,380 @@ class _TimelinePageState extends State<TimelinePage> {
     }
   }
 
+  Iterable<Map<Object?, Object?>> get _selectedItems =>
+      items.where((item) => _selectedIds.contains(item['id']));
+
+  void _toggleSelect(String id) => setState(() {
+    if (!_selectedIds.remove(id)) _selectedIds.add(id);
+  });
+
+  void _enterSelection(String id) => setState(() {
+    _selecting = true;
+    _selectedIds
+      ..clear()
+      ..add(id);
+  });
+
+  void _exitSelection() => setState(() {
+    _selecting = false;
+    _selectedIds.clear();
+  });
+
+  void _toggleSelectAll() => setState(() {
+    final allSelected = items.isNotEmpty && _selectedIds.length == items.length;
+    _selectedIds
+      ..clear()
+      ..addAll(
+        allSelected
+            ? const <String>[]
+            : items.map((item) => item['id']! as String),
+      );
+  });
+
+  Future<void> _deleteSelected() async {
+    final selected = _selectedItems.toList();
+    if (selected.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          'Delete ${selected.length} session'
+          '${selected.length == 1 ? '' : 's'}?',
+        ),
+        content: const Text(
+          'This removes the local encrypted recordings and their transcripts. '
+          'This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      for (final item in selected) {
+        final id = item['id']! as String;
+        await nativeCommands.invokeMethod(
+          item['isEpisode'] == true ? 'deleteEpisode' : 'deleteSegment',
+          {'id': id},
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        _selecting = false;
+        _selectedIds.clear();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Deleted ${selected.length} session'
+            '${selected.length == 1 ? '' : 's'}',
+          ),
+        ),
+      );
+      await refresh();
+    } on PlatformException catch (exception) {
+      if (mounted) setState(() => error = exception.message);
+    }
+  }
+
+  Future<void> _exportSelected() async {
+    final selected = _selectedItems.toList();
+    if (selected.isEmpty) return;
+    try {
+      await nativeCommands.invokeMethod('exportDocument', {
+        'content': buildSessionsMarkdown(selected),
+        'fileName': buildSessionsFileName(selected),
+        'mimeType': 'text/markdown',
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Markdown export saved')));
+    } on PlatformException catch (exception) {
+      if (exception.code == 'export_cancelled') return;
+      if (mounted) setState(() => error = exception.message);
+    }
+  }
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text('Transcripts'),
-      actions: [
-        IconButton(
-          tooltip: 'Search recall',
-          onPressed: () => Navigator.of(
-            context,
-          ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
-          icon: const Icon(Icons.search),
+  Widget build(BuildContext context) {
+    final allSelected = items.isNotEmpty && _selectedIds.length == items.length;
+    return Scaffold(
+      appBar: AppBar(
+        leading: _selecting
+            ? IconButton(
+                tooltip: 'Exit selection',
+                onPressed: _exitSelection,
+                icon: const Icon(Icons.close),
+              )
+            : null,
+        automaticallyImplyLeading: !_selecting,
+        title: Text(
+          _selecting ? '${_selectedIds.length} selected' : 'Transcripts',
         ),
-        IconButton(
-          tooltip: 'Settings',
-          onPressed: () => Navigator.of(
-            context,
-          ).push(MaterialPageRoute(builder: (_) => const SettingsPage())),
-          icon: const Icon(Icons.settings),
-        ),
-        IconButton(
-          tooltip: 'Refresh',
-          onPressed: refresh,
-          icon: const Icon(Icons.refresh),
-        ),
-      ],
-    ),
-    body: RefreshIndicator(
-      onRefresh: refresh,
-      child: Scrollbar(
-        controller: _scrollController,
-        thumbVisibility: true,
-        interactive: true,
-        child: ListView(
-          controller: _scrollController,
-          padding: const EdgeInsets.all(20),
-          children: [
-            ValueListenableBuilder(
-              valueListenable: workflowActivity,
-              builder: (context, activity, _) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        actions: [
+          if (_selecting)
+            IconButton(
+              tooltip: allSelected ? 'Deselect all' : 'Select all',
+              onPressed: items.isEmpty ? null : _toggleSelectAll,
+              icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
+            )
+          else ...[
+            IconButton(
+              tooltip: 'Search recall',
+              onPressed: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
+              icon: const Icon(Icons.search),
+            ),
+            IconButton(
+              tooltip: 'Settings',
+              onPressed: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const SettingsPage())),
+              icon: const Icon(Icons.settings),
+            ),
+            IconButton(
+              tooltip: 'Refresh',
+              onPressed: refresh,
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
+        ],
+      ),
+      bottomNavigationBar: _selecting
+          ? BottomAppBar(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
                 children: [
-                  WorkflowBanner(activity: activity),
-                  Card(
-                    margin: EdgeInsets.zero,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.playlist_play,
-                                size: 18,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'Queue processing',
-                                  style: Theme.of(context).textTheme.titleSmall,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Column(
-                            children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Tooltip(
-                                      message: activity.transcribing
-                                          ? 'Stop transcription'
-                                          : 'Transcribe pending',
-                                      child: FilledButton.icon(
-                                        onPressed: () => activity.transcribing
-                                            ? stop('stopTranscription')
-                                            : run('transcribeNow'),
-                                        icon: Icon(
-                                          activity.transcribing
-                                              ? Icons.stop
-                                              : Icons.graphic_eq,
-                                        ),
-                                        label: Text(
-                                          activity.transcribing
-                                              ? 'Stop transcript'
-                                              : 'Transcribe',
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Tooltip(
-                                      message: 'Retry failed transcripts',
-                                      child: OutlinedButton.icon(
-                                        onPressed: () => retryAll(
-                                          'retryFailedTranscriptions',
-                                        ),
-                                        icon: const Icon(
-                                          Icons.refresh,
-                                          size: 18,
-                                        ),
-                                        label: const Text('Retry'),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Tooltip(
-                                      message: activity.summarizing
-                                          ? 'Stop summary'
-                                          : 'Summarize pending',
-                                      child: FilledButton.tonalIcon(
-                                        onPressed: () => activity.summarizing
-                                            ? stop('stopSummary')
-                                            : run('summarizeNow'),
-                                        icon: Icon(
-                                          activity.summarizing
-                                              ? Icons.stop
-                                              : Icons.summarize_outlined,
-                                        ),
-                                        label: Text(
-                                          activity.summarizing
-                                              ? 'Stop summary'
-                                              : 'Summarize',
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Tooltip(
-                                      message: 'Retry failed summaries',
-                                      child: OutlinedButton.icon(
-                                        onPressed: () =>
-                                            retryAll('retryFailedSummaries'),
-                                        icon: const Icon(
-                                          Icons.refresh,
-                                          size: 18,
-                                        ),
-                                        label: const Text('Retry'),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ],
+                  Expanded(
+                    child: Tooltip(
+                      message: 'Export selection as markdown',
+                      child: OutlinedButton.icon(
+                        onPressed: _selectedIds.isEmpty
+                            ? null
+                            : _exportSelected,
+                        icon: const Icon(Icons.upload_file),
+                        label: const Text('Export .md'),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Tooltip(
+                      message: 'Delete selected sessions',
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Theme.of(context).colorScheme.error,
+                          foregroundColor: Theme.of(
+                            context,
+                          ).colorScheme.onError,
+                        ),
+                        onPressed: _selectedIds.isEmpty
+                            ? null
+                            : _deleteSelected,
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Delete'),
                       ),
                     ),
                   ),
                 ],
               ),
-            ),
-            if (error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Text(
-                  error!,
-                  style: const TextStyle(color: Colors.redAccent),
+            )
+          : null,
+      body: RefreshIndicator(
+        onRefresh: refresh,
+        child: Scrollbar(
+          controller: _scrollController,
+          thumbVisibility: true,
+          interactive: true,
+          child: ListView(
+            controller: _scrollController,
+            padding: const EdgeInsets.all(20),
+            children: [
+              ValueListenableBuilder(
+                valueListenable: workflowActivity,
+                builder: (context, activity, _) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    WorkflowBanner(activity: activity),
+                    Card(
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.playlist_play,
+                                  size: 18,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Queue processing',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleSmall,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Tooltip(
+                                        message: activity.transcribing
+                                            ? 'Stop transcription'
+                                            : 'Transcribe pending',
+                                        child: FilledButton.icon(
+                                          onPressed: () => activity.transcribing
+                                              ? stop('stopTranscription')
+                                              : run('transcribeNow'),
+                                          icon: Icon(
+                                            activity.transcribing
+                                                ? Icons.stop
+                                                : Icons.graphic_eq,
+                                          ),
+                                          label: Text(
+                                            activity.transcribing
+                                                ? 'Stop transcript'
+                                                : 'Transcribe',
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Tooltip(
+                                        message: 'Retry failed transcripts',
+                                        child: OutlinedButton.icon(
+                                          onPressed: () => retryAll(
+                                            'retryFailedTranscriptions',
+                                          ),
+                                          icon: const Icon(
+                                            Icons.refresh,
+                                            size: 18,
+                                          ),
+                                          label: const Text('Retry'),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Tooltip(
+                                        message: activity.summarizing
+                                            ? 'Stop summary'
+                                            : 'Summarize pending',
+                                        child: FilledButton.tonalIcon(
+                                          onPressed: () => activity.summarizing
+                                              ? stop('stopSummary')
+                                              : run('summarizeNow'),
+                                          icon: Icon(
+                                            activity.summarizing
+                                                ? Icons.stop
+                                                : Icons.summarize_outlined,
+                                          ),
+                                          label: Text(
+                                            activity.summarizing
+                                                ? 'Stop summary'
+                                                : 'Summarize',
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Tooltip(
+                                        message: 'Retry failed summaries',
+                                        child: OutlinedButton.icon(
+                                          onPressed: () =>
+                                              retryAll('retryFailedSummaries'),
+                                          icon: const Icon(
+                                            Icons.refresh,
+                                            size: 18,
+                                          ),
+                                          label: const Text('Retry'),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            const SizedBox(height: 12),
-            if (items.isEmpty)
-              const Card(
-                child: Padding(
-                  padding: EdgeInsets.all(20),
-                  child: Text('No transcripts or summaries yet.'),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    error!,
+                    style: const TextStyle(color: Colors.redAccent),
+                  ),
                 ),
-              ),
-            for (var index = 0; index < items.length; index++)
-              _TimelineEntry(
-                last: index == items.length - 1,
-                child: _TranscriptSummaryCard(
-                  item: items[index],
-                  time: formatTimestamp,
-                  retryTranscription: (id) => retry('retryTranscription', id),
-                  retrySummary: () =>
-                      retry('retrySummary', items[index]['id']! as String),
-                  onDelete: () => deleteTranscript(items[index]),
+              const SizedBox(height: 12),
+              if (items.isEmpty)
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text('No transcripts or summaries yet.'),
+                  ),
                 ),
-              ),
-          ],
+              for (var index = 0; index < items.length; index++)
+                _TimelineEntry(
+                  last: index == items.length - 1,
+                  child: _TranscriptSummaryCard(
+                    item: items[index],
+                    time: formatTimestamp,
+                    retryTranscription: (id) => retry('retryTranscription', id),
+                    retrySummary: () =>
+                        retry('retrySummary', items[index]['id']! as String),
+                    onDelete: () => deleteTranscript(items[index]),
+                    selecting: _selecting,
+                    selected: _selectedIds.contains(items[index]['id']),
+                    onToggleSelect: () =>
+                        _toggleSelect(items[index]['id']! as String),
+                    onLongPress: () =>
+                        _enterSelection(items[index]['id']! as String),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _TimelineEntry extends StatelessWidget {
   const _TimelineEntry({required this.child, required this.last});
-
   final Widget child;
   final bool last;
 
@@ -358,6 +536,10 @@ class _TranscriptSummaryCard extends StatelessWidget {
     required this.retryTranscription,
     required this.retrySummary,
     required this.onDelete,
+    required this.selecting,
+    required this.selected,
+    required this.onToggleSelect,
+    required this.onLongPress,
   });
 
   final Map<Object?, Object?> item;
@@ -365,6 +547,10 @@ class _TranscriptSummaryCard extends StatelessWidget {
   final ValueChanged<String> retryTranscription;
   final VoidCallback retrySummary;
   final VoidCallback onDelete;
+  final bool selecting;
+  final bool selected;
+  final VoidCallback onToggleSelect;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -373,86 +559,113 @@ class _TranscriptSummaryCard extends StatelessWidget {
         _string(summary?['local_title']) ??
         _string(summary?['title']) ??
         'Recording summary';
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.secondaryContainer,
-                    borderRadius: BorderRadius.circular(12),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: onLongPress,
+      onTap: selecting ? onToggleSelect : null,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        shape: selected
+            ? RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(
+                  color: Theme.of(context).colorScheme.primary,
+                  width: 2,
+                ),
+              )
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (selecting)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Checkbox(
+                        value: selected,
+                        onChanged: (_) => onToggleSelect(),
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.auto_awesome_outlined),
+                    ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          time(item['startedAt']! as int),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 8),
+                        _StateChip(
+                          label: item['summaryState'] as String? ?? 'WAITING',
+                        ),
+                      ],
+                    ),
                   ),
-                  child: const Icon(Icons.auto_awesome_outlined),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        time(item['startedAt']! as int),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 8),
-                      _StateChip(
-                        label: item['summaryState'] as String? ?? 'WAITING',
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Delete transcript',
-                  onPressed: () => _confirmDelete(context),
-                  icon: const Icon(Icons.delete_outline),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            _SummaryContent(value: item['summary'] as String?, parsed: summary),
-            if (item['summaryError'] case final String message)
-              _ErrorText(message: message),
-            if (_retryable(item['summaryState']))
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: retrySummary,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Resubmit summary'),
-                ),
+                  if (!selecting)
+                    IconButton(
+                      tooltip: 'Delete transcript',
+                      onPressed: () => _confirmDelete(context),
+                      icon: const Icon(Icons.delete_outline),
+                    ),
+                ],
               ),
-            const Divider(height: 28),
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(bottom: 8),
-              leading: const Icon(Icons.format_quote),
-              title: const Text('Transcript'),
-              subtitle: Text(
-                _segments.length == 1
-                    ? '1 segment'
-                    : '${_segments.length} segments',
+              const SizedBox(height: 16),
+              _SummaryContent(
+                value: item['summary'] as String?,
+                parsed: summary,
               ),
-              children: [
-                for (final segment in _segments)
-                  _TranscriptSegment(
-                    segment: segment,
-                    time: time,
-                    retry: () => retryTranscription(segment['id']! as String),
+              if (item['summaryError'] case final String message)
+                _ErrorText(message: message),
+              if (_retryable(item['summaryState']))
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: retrySummary,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Resubmit summary'),
                   ),
-              ],
-            ),
-          ],
+                ),
+              const Divider(height: 28),
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(bottom: 8),
+                leading: const Icon(Icons.format_quote),
+                title: const Text('Transcript'),
+                subtitle: Text(
+                  _segments.length == 1
+                      ? '1 segment'
+                      : '${_segments.length} segments',
+                ),
+                children: [
+                  for (final segment in _segments)
+                    _TranscriptSegment(
+                      segment: segment,
+                      time: time,
+                      retry: () => retryTranscription(segment['id']! as String),
+                    ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

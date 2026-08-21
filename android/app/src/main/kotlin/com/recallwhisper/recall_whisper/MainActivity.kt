@@ -289,15 +289,16 @@ class MainActivity : FlutterActivity() {
                 "exportData" -> databaseExecutor.execute {
                     val json = exportJson()
                     runOnUiThread {
-                        pendingExport = json to result
-                        startActivityForResult(
-                            Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                                addCategory(Intent.CATEGORY_OPENABLE)
-                                type = "application/json"
-                                putExtra(Intent.EXTRA_TITLE, "recallwhisper-export.json")
-                            },
-                            EXPORT_REQUEST,
-                        )
+                        startDocumentExport(json, "recallwhisper-export.json", "application/json", result)
+                    }
+                }
+                "exportDocument" -> {
+                    val content = call.argument<String>("content") ?: ""
+                    val fileName = call.argument<String>("fileName")
+                        ?: "recallwhisper-export.md"
+                    val mimeType = call.argument<String>("mimeType") ?: "text/markdown"
+                    runOnUiThread {
+                        startDocumentExport(content, fileName, mimeType, result)
                     }
                 }
                 "debugLoad" -> serverCall(result) {
@@ -530,6 +531,23 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    private fun startDocumentExport(
+        content: String,
+        fileName: String,
+        mimeType: String,
+        result: MethodChannel.Result,
+    ) {
+        pendingExport = content to result
+        startActivityForResult(
+            Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = mimeType
+                putExtra(Intent.EXTRA_TITLE, fileName)
+            },
+            EXPORT_REQUEST,
+        )
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
@@ -552,7 +570,7 @@ class MainActivity : FlutterActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != EXPORT_REQUEST) return
-        val (json, result) = pendingExport ?: return
+        val (content, result) = pendingExport ?: return
         pendingExport = null
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null) {
@@ -561,7 +579,7 @@ class MainActivity : FlutterActivity() {
         }
         runCatching {
             contentResolver.openOutputStream(uri, "wt")!!.bufferedWriter().use {
-                it.write(json)
+                it.write(content)
             }
         }.onSuccess {
             result.success(null)
