@@ -386,6 +386,204 @@ void main() {
     expect(find.text('Prevented duplicate submissions.'), findsOneWidget);
   });
 
+  testWidgets('summary sections render in order with copyable items', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(600, 3200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    String? clipboardText;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboardText = (call.arguments as Map)['text'] as String;
+          }
+          return null;
+        });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'timeline') {
+            return <Object>[
+              <String, Object?>{
+                'id': 'ep_1',
+                'isEpisode': true,
+                'startedAt': 0,
+                'summaryState': 'COMPLETE',
+                'summary':
+                    '{"summary":"We agreed to ship in phases.",'
+                    '"keywords":["alpha","beta"],'
+                    '"decisions":["Adopt phased rollout","Keep weekly syncs"],'
+                    '"action_items":["Draft migration plan","Assign reviewers"],'
+                    '"questions":["Does staging have quota?"],'
+                    '"uncertainties":["Estimate may slip two weeks"]}',
+                'segments': <Object>[],
+              },
+            ];
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+
+    // The paragraph sits above the emphasized sections, in reading order.
+    expect(find.text('We agreed to ship in phases.'), findsOneWidget);
+    final paragraph = tester.getTopLeft(
+      find.text('We agreed to ship in phases.'),
+    );
+    final decisions = tester.getTopLeft(find.text('Decisions'));
+    final actions = tester.getTopLeft(find.text('Action items'));
+    final questions = tester.getTopLeft(find.text('Questions'));
+    final uncertainties = tester.getTopLeft(find.text('Uncertainties'));
+    expect(paragraph.dy, lessThan(decisions.dy));
+    expect(decisions.dy, lessThan(actions.dy));
+    expect(actions.dy, lessThan(questions.dy));
+    expect(questions.dy, lessThan(uncertainties.dy));
+
+    // Section headers carry an icon and a heavier weight.
+    expect(
+      tester.widget<Text>(find.text('Decisions')).style?.fontWeight,
+      FontWeight.w600,
+    );
+    expect(find.byIcon(Icons.task_alt), findsOneWidget);
+
+    // Every listed item is individually selectable and copyable.
+    expect(find.text('Adopt phased rollout'), findsOneWidget);
+    expect(find.text('Estimate may slip two weeks'), findsOneWidget);
+    await tester.tap(find.byTooltip('Copy Decision').first);
+    await tester.pumpAndSettle();
+    expect(clipboardText, 'Adopt phased rollout');
+    expect(find.text('Decision copied'), findsOneWidget);
+    await tester.tap(find.byTooltip('Copy Uncertainty'));
+    await tester.pumpAndSettle();
+    expect(clipboardText, 'Estimate may slip two weeks');
+    expect(find.text('Uncertainty copied'), findsOneWidget);
+  });
+
+  testWidgets(
+    'transcript segments lay out on narrow screens without overflow',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 3200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(nativeCommands, (call) async {
+            if (call.method == 'timeline') {
+              return <Object>[
+                <String, Object?>{
+                  'id': 'ep_1',
+                  'isEpisode': true,
+                  'startedAt': 0,
+                  'summaryState': 'COMPLETE',
+                  'summary':
+                      '{"summary":"We agreed to ship in phases.",'
+                      '"decisions":["Adopt phased rollout"],'
+                      '"action_items":["Draft migration plan"],'
+                      '"questions":["Does staging have quota?"],'
+                      '"uncertainties":["Estimate may slip two weeks"]}',
+                  'segments': <Object>[
+                    <String, Object?>{
+                      'id': 'segment-1',
+                      'startedAt': 0,
+                      'transcript': 'First spoken text.',
+                      'transcriptionState': 'COMPLETE',
+                    },
+                    <String, Object?>{
+                      'id': 'segment-2',
+                      'startedAt': 1000,
+                      'transcript': 'Second spoken text.',
+                      'transcriptionState': 'COMPLETE',
+                    },
+                  ],
+                },
+              ];
+            }
+            return null;
+          });
+      await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('Transcript'));
+      await tester.pumpAndSettle();
+      // Episode state plus both segment states render as compact chips.
+      expect(find.text('complete'), findsNWidgets(3));
+      expect(find.text('First spoken text.'), findsOneWidget);
+      expect(find.text('Second spoken text.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('topic content is selectable and sections are labeled', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(600, 3200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    String? clipboardText;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboardText = (call.arguments as Map)['text'] as String;
+          }
+          return null;
+        });
+    const description =
+        'Authentication architecture. Token storage, refresh flows, and '
+        'device revocation for the mobile client.';
+    const currentSummary =
+        'The app now refreshes tokens before they expire and revokes them '
+        'when a device is unpaired.';
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method != 'topics') return null;
+          return <Object>[
+            <String, Object>{
+              'id': 'top_1',
+              'title': 'Flutter authentication',
+              'description': description,
+              'currentSummary': currentSummary,
+              'firstSeen': 0,
+              'lastSeen': 3600000,
+              'episodes': <Object>[
+                <String, Object>{
+                  'id': 'ep_1',
+                  'startedAt': 0,
+                  'endedAt': 600000,
+                  'title': 'Controller state',
+                  'summary': '{"summary":"Moved state out of the widget."}',
+                  'status': 'provisional',
+                },
+                <String, Object>{
+                  'id': 'ep_2',
+                  'startedAt': 3000000,
+                  'endedAt': 3600000,
+                  'title': 'Submission handling',
+                  'summary': '{"summary":"Prevented duplicate submissions."}',
+                  'status': 'provisional',
+                },
+              ],
+            },
+          ];
+        });
+    await tester.pumpWidget(const MaterialApp(home: TopicsPage()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Flutter authentication'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Consolidated summary'), findsOneWidget);
+    expect(find.text('Occurrences'), findsOneWidget);
+    expect(find.byTooltip('Copy Description'), findsOneWidget);
+    expect(find.byTooltip('Copy Consolidated summary'), findsOneWidget);
+    expect(find.byTooltip('Copy Episode summary'), findsNWidgets(2));
+
+    await tester.tap(find.byTooltip('Copy Description'));
+    await tester.pumpAndSettle();
+    expect(clipboardText, description);
+    await tester.tap(find.byTooltip('Copy Episode summary').first);
+    await tester.pumpAndSettle();
+    expect(clipboardText, 'Moved state out of the widget.');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('successful equal workflow polls refresh timeline data', (
     tester,
   ) async {

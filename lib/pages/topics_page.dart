@@ -116,14 +116,35 @@ class _TopicsPageState extends State<TopicsPage> {
                 childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 expandedCrossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(topic['description'] as String),
-                  const SizedBox(height: 8),
                   CopyableText(
-                    topic['currentSummary'] as String,
-                    label: 'Summary',
-                    style: Theme.of(context).textTheme.bodyMedium,
+                    topic['description'] as String,
+                    label: 'Description',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyMedium?.copyWith(height: 1.45),
                   ),
-                  const Divider(height: 24),
+                  if (_isNotEmpty(topic['description']))
+                    const SizedBox(height: 16),
+                  if (_isNotEmpty(topic['currentSummary'])) ...[
+                    Text(
+                      'Consolidated summary',
+                      style: _sectionHeaderStyle(context),
+                    ),
+                    const SizedBox(height: 8),
+                    CopyableText(
+                      topic['currentSummary'] as String,
+                      label: 'Consolidated summary',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyMedium?.copyWith(height: 1.45),
+                    ),
+                  ],
+                  const Divider(height: 28),
+                  if ((topic['episodes'] as List<Object?>? ?? const [])
+                      .isNotEmpty) ...[
+                    Text('Occurrences', style: _sectionHeaderStyle(context)),
+                    const SizedBox(height: 4),
+                  ],
                   for (final rawEpisode
                       in (topic['episodes'] as List<Object?>? ?? const []))
                     _EpisodeTile(
@@ -138,6 +159,17 @@ class _TopicsPageState extends State<TopicsPage> {
   );
 }
 
+TextStyle? _sectionHeaderStyle(BuildContext context) =>
+    Theme.of(context).textTheme.titleSmall?.copyWith(
+      fontWeight: FontWeight.w600,
+      color: Theme.of(context).colorScheme.primary,
+    );
+
+bool _isNotEmpty(Object? value) {
+  final text = value?.toString().trim();
+  return text != null && text.isNotEmpty;
+}
+
 class _EpisodeTile extends StatelessWidget {
   const _EpisodeTile({required this.episode});
 
@@ -145,6 +177,7 @@ class _EpisodeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final start = DateTime.fromMillisecondsSinceEpoch(
       episode['startedAt'] as int,
     ).toLocal();
@@ -168,12 +201,17 @@ class _EpisodeTile extends StatelessWidget {
             '${end.hour.toString().padLeft(2, '0')}:'
             '${end.minute.toString().padLeft(2, '0')} · '
             '${episode['status']}',
-            style: Theme.of(context).textTheme.labelMedium,
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           CopyableText(
             _episodeSummary(episode['summary'] as String),
-            label: 'Summary',
+            label: 'Episode summary',
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(height: 1.45),
           ),
         ],
       ),

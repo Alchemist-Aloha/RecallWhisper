@@ -793,15 +793,22 @@ class _TranscriptSegment extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          time(segment['startedAt']! as int),
-          style: Theme.of(context).textTheme.labelMedium,
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                time(segment['startedAt']! as int),
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            _StateChip(
+              label: segment['transcriptionState'] as String? ?? 'PENDING',
+            ),
+          ],
         ),
-        const SizedBox(height: 6),
-        _StateChip(
-          label: segment['transcriptionState'] as String? ?? 'PENDING',
-        ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 10),
         CopyableText(
           segment['transcriptionState'] == 'EMPTY'
               ? 'No human voice detected.'
@@ -852,9 +859,7 @@ class _SummaryContent extends StatelessWidget {
           CopyableText(
             summary,
             label: 'Summary',
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(height: 1.45),
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.5),
           ),
         if (tags.isNotEmpty) ...[
           const SizedBox(height: 14),
@@ -864,20 +869,28 @@ class _SummaryContent extends StatelessWidget {
             children: [for (final tag in tags) Chip(label: Text(tag))],
           ),
         ],
-        _SummaryList(
+        _SummarySection(
           title: 'Decisions',
+          icon: Icons.check_circle_outline,
+          itemLabel: 'Decision',
           values: _strings(parsed!['decisions']),
         ),
-        _SummaryList(
+        _SummarySection(
           title: 'Action items',
+          icon: Icons.task_alt,
+          itemLabel: 'Action item',
           values: _strings(parsed!['action_items']),
         ),
-        _SummaryList(
+        _SummarySection(
           title: 'Questions',
+          icon: Icons.help_outline,
+          itemLabel: 'Question',
           values: _strings(parsed!['questions']),
         ),
-        _SummaryList(
+        _SummarySection(
           title: 'Uncertainties',
+          icon: Icons.warning_amber,
+          itemLabel: 'Uncertainty',
           values: _strings(parsed!['uncertainties']),
         ),
       ],
@@ -906,30 +919,66 @@ class _SummaryContent extends StatelessWidget {
   }
 }
 
-class _SummaryList extends StatelessWidget {
-  const _SummaryList({required this.title, required this.values});
+class _SummarySection extends StatelessWidget {
+  const _SummarySection({
+    required this.title,
+    required this.icon,
+    required this.itemLabel,
+    required this.values,
+  });
 
   final String title;
+  final IconData icon;
+  final String itemLabel;
   final List<String> values;
 
   @override
   Widget build(BuildContext context) {
     if (values.isEmpty) return const SizedBox.shrink();
+    final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.only(top: 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: Theme.of(context).textTheme.labelLarge),
-          const SizedBox(height: 6),
+          Row(
+            children: [
+              Icon(icon, size: 18, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.onSurface,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
           for (final value in values)
             Padding(
-              padding: const EdgeInsets.only(bottom: 5),
+              padding: const EdgeInsets.only(bottom: 8),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('•  '),
-                  Expanded(child: Text(value)),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1, right: 8),
+                    child: Text(
+                      '•',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: CopyableText(
+                      value,
+                      label: itemLabel,
+                      style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -945,14 +994,40 @@ class _StateChip extends StatelessWidget {
   final String label;
 
   @override
-  Widget build(BuildContext context) => Chip(
-    avatar: Icon(
-      label == 'COMPLETE' ? Icons.check_circle_outline : Icons.schedule,
-      size: 17,
-    ),
-    label: Text(label.toLowerCase()),
-    visualDensity: VisualDensity.compact,
-  );
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final state = label.toUpperCase();
+    final (icon, background, foreground) = switch (state) {
+      'COMPLETE' => (
+        Icons.check_circle_outline,
+        scheme.secondaryContainer,
+        scheme.onSecondaryContainer,
+      ),
+      'EMPTY' => (
+        Icons.volume_off,
+        scheme.surfaceContainerHigh,
+        scheme.onSurfaceVariant,
+      ),
+      'FAILED' || 'RETRY_WAIT' => (
+        Icons.error_outline,
+        scheme.errorContainer,
+        scheme.onErrorContainer,
+      ),
+      _ => (
+        Icons.schedule,
+        scheme.surfaceContainerHigh,
+        scheme.onSurfaceVariant,
+      ),
+    };
+    return Chip(
+      avatar: Icon(icon, size: 16, color: foreground),
+      label: Text(label.toLowerCase()),
+      labelStyle: TextStyle(color: foreground, fontSize: 12),
+      backgroundColor: background,
+      side: BorderSide.none,
+      visualDensity: VisualDensity.compact,
+    );
+  }
 }
 
 class _ErrorText extends StatelessWidget {
