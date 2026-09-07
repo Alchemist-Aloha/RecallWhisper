@@ -7,6 +7,7 @@ import '../channels.dart';
 import '../format.dart';
 import '../markdown_export.dart';
 import '../widgets/copyable_text.dart';
+import '../widgets/status_views.dart';
 import '../widgets/workflow.dart';
 import 'search_page.dart';
 import 'settings_page.dart';
@@ -491,18 +492,15 @@ class _TimelinePageState extends State<TimelinePage> {
               if (error != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 12),
-                  child: Text(
-                    error!,
-                    style: const TextStyle(color: Colors.redAccent),
-                  ),
+                  child: ErrorText(message: error!),
                 ),
               const SizedBox(height: 12),
               if (items.isEmpty)
-                const Card(
-                  child: Padding(
-                    padding: EdgeInsets.all(20),
-                    child: Text('No transcripts or summaries yet.'),
-                  ),
+                const EmptyState(
+                  icon: Icons.notes_outlined,
+                  title: 'No transcripts or summaries yet.',
+                  message:
+                      'Record with the Recorder tab, then transcribe and summarize.',
                 ),
               for (var index = 0; index < items.length; index++)
                 _TimelineEntry(
@@ -682,7 +680,10 @@ class _TranscriptSummaryCard extends StatelessWidget {
                 parsed: summary,
               ),
               if (item['summaryError'] case final String message)
-                _ErrorText(message: message),
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: ErrorText(message: message),
+                ),
               if (_retryable(item['summaryState']))
                 Align(
                   alignment: Alignment.centerRight,
@@ -816,7 +817,10 @@ class _TranscriptSegment extends StatelessWidget {
           label: 'Transcript',
         ),
         if (segment['transcriptionError'] case final String message)
-          _ErrorText(message: message),
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: ErrorText(message: message),
+          ),
         if (segment['transcriptionState'] == 'FAILED' ||
             segment['transcriptionState'] == 'RETRY_WAIT')
           Align(
@@ -1028,16 +1032,4 @@ class _StateChip extends StatelessWidget {
       visualDensity: VisualDensity.compact,
     );
   }
-}
-
-class _ErrorText extends StatelessWidget {
-  const _ErrorText({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 10),
-    child: Text(message, style: const TextStyle(color: Colors.redAccent)),
-  );
 }

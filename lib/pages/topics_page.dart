@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../channels.dart';
 import '../format.dart';
 import '../widgets/copyable_text.dart';
+import '../widgets/status_views.dart';
 import '../widgets/workflow.dart';
 import 'search_page.dart';
 import 'settings_page.dart';
@@ -92,17 +93,13 @@ class _TopicsPageState extends State<TopicsPage> {
           const Text(
             'Recurring subjects are grouped here while every separate occurrence keeps its own time range.',
           ),
-          if (error != null)
-            Text(error!, style: const TextStyle(color: Colors.redAccent)),
+          if (error != null) ErrorText(message: error!),
           const SizedBox(height: 12),
           if (topics.isEmpty)
-            const Card(
-              child: Padding(
-                padding: EdgeInsets.all(20),
-                child: Text(
-                  'No topics yet. Transcribe recordings, then run Summarize.',
-                ),
-              ),
+            const EmptyState(
+              icon: Icons.topic_outlined,
+              title: 'No topics yet.',
+              message: 'Transcribe recordings, then run Summarize.',
             ),
           for (final topic in topics)
             Card(

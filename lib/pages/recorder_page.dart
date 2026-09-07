@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../channels.dart';
 import '../format.dart';
+import '../widgets/status_views.dart';
 import '../widgets/workflow.dart';
 import 'search_page.dart';
 import 'settings_page.dart';
@@ -160,7 +161,7 @@ class _RecorderPageState extends State<RecorderPage> {
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),
-              Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+              ErrorText(message: _error!),
             ],
             const SizedBox(height: 16),
             FilledButton.icon(
@@ -223,11 +224,10 @@ class _RecorderPageState extends State<RecorderPage> {
             ),
             const SizedBox(height: 8),
             if (_segments.isEmpty)
-              const Card(
-                child: Padding(
-                  padding: EdgeInsets.all(20),
-                  child: Text('No speech segments yet.'),
-                ),
+              const EmptyState(
+                icon: Icons.multitrack_audio,
+                title: 'No speech segments yet.',
+                message: 'Recordings you keep while listening appear here.',
               ),
             for (final segment in _segments)
               Card(

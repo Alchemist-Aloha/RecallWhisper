@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../channels.dart';
+import '../widgets/status_views.dart';
 
 class DebugPage extends StatefulWidget {
   const DebugPage({super.key});
@@ -286,7 +287,7 @@ class _DebugPageState extends State<DebugPage> {
           ],
           if (error != null) ...[
             const SizedBox(height: 16),
-            Text(error!, style: const TextStyle(color: Colors.redAccent)),
+            ErrorText(message: error!),
           ],
           if (response != null) ...[
             const SizedBox(height: 24),

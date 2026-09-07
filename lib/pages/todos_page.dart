@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../channels.dart';
+import '../widgets/status_views.dart';
 
 enum _TodoFilter { all, open, done }
 
@@ -200,36 +201,19 @@ class _TodosPageState extends State<TodosPage> {
             if (error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
-                child: Text(
-                  error!,
-                  style: const TextStyle(color: Colors.redAccent),
-                ),
+                child: ErrorText(message: error!),
               ),
             if (todos.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 48),
-                child: Column(
-                  children: [
-                    Icon(
-                      Icons.checklist,
-                      size: 48,
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-                    const SizedBox(height: 12),
-                    const Text('No todos yet.'),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Extract action items from summaries or add your own.',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
+              const EmptyState(
+                icon: Icons.checklist,
+                title: 'No todos yet.',
+                message: 'Extract action items from summaries or add your own.',
               )
             else if (visible.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 48),
-                child: Center(child: Text('Nothing here.')),
+              const EmptyState(
+                icon: Icons.filter_alt_off,
+                title: 'Nothing here.',
+                message: 'No todos match this filter.',
               )
             else
               for (final item in visible)

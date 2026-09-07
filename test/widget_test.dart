@@ -1722,4 +1722,71 @@ void main() {
     expect(checkboxes, hasLength(1));
     expect(checkboxes.single.value, isTrue);
   });
+
+  testWidgets('main panels show guided empty states', (tester) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'status') {
+            return <String, Object>{'state': 'STOPPED'};
+          }
+          if (call.method == 'processingStatus') {
+            return <String, Object>{
+              'transcribing': false,
+              'summarizing': false,
+            };
+          }
+          return <Object>[];
+        });
+    workflowActivity.value = (transcribing: false, summarizing: false);
+
+    await tester.pumpWidget(const MaterialApp(home: RecorderPage()));
+    await tester.pumpAndSettle();
+    expect(find.text('No speech segments yet.'), findsOneWidget);
+    expect(
+      find.text('Recordings you keep while listening appear here.'),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+    expect(find.text('No transcripts or summaries yet.'), findsOneWidget);
+    expect(
+      find.text('Record with the Recorder tab, then transcribe and summarize.'),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const MaterialApp(home: TopicsPage()));
+    await tester.pumpAndSettle();
+    expect(find.text('No topics yet.'), findsOneWidget);
+    expect(
+      find.text('Transcribe recordings, then run Summarize.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('search page guides before querying and reports no matches', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          if (call.method == 'search') return <Object>[];
+          return null;
+        });
+    workflowActivity.value = (transcribing: false, summarizing: false);
+    await tester.pumpWidget(const MaterialApp(home: SearchPage()));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Search your transcripts for names, topics, and decisions.'),
+      findsOneWidget,
+    );
+
+    await tester.enterText(find.byType(SearchBar), 'nonexistent');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(find.text('No matching transcript evidence.'), findsOneWidget);
+    expect(
+      find.text('Search your transcripts for names, topics, and decisions.'),
+      findsNothing,
+    );
+  });
 }

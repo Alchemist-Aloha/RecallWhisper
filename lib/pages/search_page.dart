@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../channels.dart';
+import '../widgets/status_views.dart';
 
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
@@ -69,19 +70,25 @@ class _SearchPageState extends State<SearchPage> {
           hintText: 'Names, topics, decisions, exact phrases',
           onSubmitted: (_) => search(),
           trailing: [
-            IconButton(onPressed: search, icon: const Icon(Icons.search)),
+            IconButton(
+              tooltip: 'Search',
+              onPressed: search,
+              icon: const Icon(Icons.search),
+            ),
           ],
         ),
         if (error != null)
           Padding(
             padding: const EdgeInsets.only(top: 12),
-            child: Text(
-              error!,
-              style: const TextStyle(color: Colors.redAccent),
-            ),
+            child: ErrorText(message: error!),
           ),
         const SizedBox(height: 16),
-        if (results.isEmpty) const Text('No matching transcript evidence.'),
+        if (results.isEmpty)
+          Text(
+            _query.isEmpty
+                ? 'Search your transcripts for names, topics, and decisions.'
+                : 'No matching transcript evidence.',
+          ),
         for (final result in results)
           Card(
             child: ListTile(
