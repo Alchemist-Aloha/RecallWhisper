@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:recall_whisper/main.dart';
+import 'package:recall_whisper/widgets/copyable_text.dart';
 
 void main() {
   testWidgets('shows stopped recorder and empty segment list', (tester) async {
@@ -1332,5 +1335,193 @@ void main() {
     expect(calls.last, 'timeline');
     expect(find.text('Deleted 2 sessions'), findsOneWidget);
     expect(find.text('2 selected'), findsNothing);
+  });
+
+  testWidgets('copy button handles empty, long, repeated and disposed use', (
+    tester,
+  ) async {
+    final copied = <String>[];
+    var gate = Completer<void>();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied.add((call.arguments as Map)['text'] as String);
+            await gate.future;
+          }
+          return null;
+        });
+
+    // Empty text offers nothing to copy and never writes the clipboard.
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: CopyableText('', label: 'Empty')),
+      ),
+    );
+    expect(find.byTooltip('Copy Empty'), findsNothing);
+    await tester.pump();
+    expect(copied, isEmpty);
+
+    // Long selectable content copies exactly and lays out without errors.
+    final long = List<String>.filled(300, 'A long spoken paragraph.').join(' ');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: CopyableText(long, label: 'Long')),
+      ),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byTooltip('Copy Long'));
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(copied.last, long);
+    expect(find.text('Long copied'), findsOneWidget);
+
+    // A second tap while the first copy is still pending is ignored.
+    copied.clear();
+    gate = Completer<void>();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: CopyableText('Repeat me', label: 'Repeat')),
+      ),
+    );
+    final copy = find.byTooltip('Copy Repeat');
+    await tester.tap(copy);
+    await tester.tap(copy);
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(copied, <String>['Repeat me']);
+    expect(find.text('Repeat copied'), findsOneWidget);
+
+    // Unmounting while the clipboard write is still pending is safe.
+    copied.clear();
+    gate = Completer<void>();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: CopyableText('Bye', label: 'Bye')),
+      ),
+    );
+    await tester.tap(find.byTooltip('Copy Bye'));
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(copied, <String>['Bye']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('single delete reports missing ids and native failures', (
+    tester,
+  ) async {
+    useTallTestSurface(tester);
+    final calls = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          calls.add(call.method);
+          if (call.method == 'timeline') {
+            return <Object>[
+              <String, Object?>{
+                'startedAt': 0,
+                'summary': '{"summary":"Headless session."}',
+                'summaryState': 'COMPLETE',
+                'transcript': 'Spoken.',
+                'transcriptionState': 'COMPLETE',
+              },
+              <String, Object?>{
+                'id': 'gone_1',
+                'isEpisode': true,
+                'startedAt': 1000,
+                'summary': '{"summary":"Gone session."}',
+                'segments': <Object>[],
+              },
+            ];
+          }
+          if (call.method == 'deleteEpisode') {
+            throw PlatformException(
+              code: 'not_found',
+              message: 'This recording was already deleted.',
+            );
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+
+    // A row without an id cannot be deleted; it reports clearly instead of crashing.
+    final confirmDelete = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.text('Delete'),
+    );
+    await tester.tap(find.byTooltip('Delete transcript').first);
+    await tester.pumpAndSettle();
+    await tester.tap(confirmDelete);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('missing its id'), findsOneWidget);
+    expect(calls.where((method) => method == 'deleteEpisode'), isEmpty);
+
+    // A native "already deleted" failure surfaces instead of claiming success.
+    await tester.tap(find.byTooltip('Delete transcript').last);
+    await tester.pumpAndSettle();
+    await tester.tap(confirmDelete);
+    await tester.pumpAndSettle();
+    expect(calls.where((method) => method == 'deleteEpisode'), hasLength(1));
+    expect(find.text('This recording was already deleted.'), findsOneWidget);
+    expect(find.textContaining('Deleted'), findsNothing);
+  });
+
+  testWidgets('multi-delete reports partial failure and keeps failed item', (
+    tester,
+  ) async {
+    useTallTestSurface(tester);
+    final calls = <String>[];
+    final deleted = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeCommands, (call) async {
+          calls.add(call.method);
+          if (call.method == 'timeline') {
+            return twoSessionTimeline()
+                .where((item) => !deleted.contains(item['id']))
+                .toList();
+          }
+          if (call.method == 'deleteEpisode') {
+            final id = (call.arguments as Map)['id'] as String;
+            if (id == 'ep_1') {
+              throw PlatformException(
+                code: 'delete_failed',
+                message: 'Storage is busy.',
+              );
+            }
+            deleted.add(id);
+          }
+          return null;
+        });
+    await tester.pumpWidget(const MaterialApp(home: TimelinePage()));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('Second session'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('First session'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete 2 sessions?'), findsOneWidget);
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Delete'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Both deletes were attempted; the failed one is not claimed as deleted.
+    expect(calls.where((method) => method == 'deleteEpisode'), hasLength(2));
+    expect(find.textContaining('Deleted 1 of 2 sessions'), findsOneWidget);
+    expect(find.text('Storage is busy.'), findsOneWidget);
+    expect(find.textContaining('Deleted 2 sessions'), findsNothing);
+
+    // The deleted session is gone, the failed one stays selected for retry.
+    expect(find.text('Second session'), findsNothing);
+    expect(find.text('First session'), findsOneWidget);
+    expect(find.text('1 selected'), findsOneWidget);
+    final checkboxes = tester.widgetList<Checkbox>(find.byType(Checkbox));
+    expect(checkboxes, hasLength(1));
+    expect(checkboxes.single.value, isTrue);
   });
 }

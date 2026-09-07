@@ -24,6 +24,7 @@ class _TimelinePageState extends State<TimelinePage> {
   int _refreshRequest = 0;
   final _scrollController = ScrollController();
   bool _selecting = false;
+  bool _deleting = false;
   final Set<String> _selectedIds = {};
 
   @override
@@ -50,6 +51,12 @@ class _TimelinePageState extends State<TimelinePage> {
             .map((value) => Map<Object?, Object?>.from(value! as Map))
             .toList();
         error = null;
+        // Keep selection consistent with what still exists after refresh.
+        if (_selecting) {
+          final liveIds = items.map((item) => item['id']).toSet();
+          _selectedIds.removeWhere((id) => !liveIds.contains(id));
+          if (_selectedIds.isEmpty) _selecting = false;
+        }
       });
     } on PlatformException catch (exception) {
       if (mounted && request == _refreshRequest) {
@@ -97,16 +104,30 @@ class _TimelinePageState extends State<TimelinePage> {
   }
 
   Future<void> deleteTranscript(Map<Object?, Object?> item) async {
-    final id = item['id']! as String;
-    try {
-      if (item['isEpisode'] == true) {
-        await nativeCommands.invokeMethod('deleteEpisode', {'id': id});
-      } else {
-        await nativeCommands.invokeMethod('deleteSegment', {'id': id});
+    final id = item['id'];
+    if (id is! String || id.isEmpty) {
+      if (mounted) {
+        setState(
+          () => error =
+              'This transcript is missing its id and cannot be deleted.',
+        );
       }
+      return;
+    }
+    try {
+      await nativeCommands.invokeMethod(
+        item['isEpisode'] == true ? 'deleteEpisode' : 'deleteSegment',
+        {'id': id},
+      );
       await refresh();
     } on PlatformException catch (exception) {
-      if (mounted) setState(() => error = exception.message);
+      // Reconcile in case the recording was already deleted natively.
+      await refresh();
+      if (mounted) {
+        setState(
+          () => error = exception.message ?? 'Could not delete this session.',
+        );
+      }
     }
   }
 
@@ -142,7 +163,7 @@ class _TimelinePageState extends State<TimelinePage> {
 
   Future<void> _deleteSelected() async {
     final selected = _selectedItems.toList();
-    if (selected.isEmpty) return;
+    if (selected.isEmpty || _deleting) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -171,30 +192,57 @@ class _TimelinePageState extends State<TimelinePage> {
       ),
     );
     if (confirmed != true || !mounted) return;
+    setState(() => _deleting = true);
     try {
+      final failures = <String, String>{};
       for (final item in selected) {
-        final id = item['id']! as String;
-        await nativeCommands.invokeMethod(
-          item['isEpisode'] == true ? 'deleteEpisode' : 'deleteSegment',
-          {'id': id},
-        );
+        final id = item['id'];
+        if (id is! String || id.isEmpty) {
+          failures['$id'] = 'Missing id.';
+          continue;
+        }
+        try {
+          await nativeCommands.invokeMethod(
+            item['isEpisode'] == true ? 'deleteEpisode' : 'deleteSegment',
+            {'id': id},
+          );
+        } on PlatformException catch (exception) {
+          failures[id] = exception.message ?? 'Could not delete this session.';
+        } on Object catch (exception) {
+          failures[id] = exception.toString();
+        }
+        if (!mounted) return;
       }
+      await refresh();
       if (!mounted) return;
       setState(() {
-        _selecting = false;
-        _selectedIds.clear();
+        if (failures.isEmpty) {
+          _selecting = false;
+          _selectedIds.clear();
+        } else {
+          // Keep the failed sessions selected so the user can retry or exit.
+          _selectedIds.removeWhere((id) => !failures.containsKey(id));
+          if (_selectedIds.isEmpty) _selecting = false;
+        }
       });
-      ScaffoldMessenger.of(context).showSnackBar(
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
         SnackBar(
           content: Text(
-            'Deleted ${selected.length} session'
-            '${selected.length == 1 ? '' : 's'}',
+            failures.isEmpty
+                ? 'Deleted ${selected.length} session'
+                      '${selected.length == 1 ? '' : 's'}'
+                : 'Deleted ${selected.length - failures.length} of '
+                      '${selected.length} sessions',
           ),
         ),
       );
-      await refresh();
-    } on PlatformException catch (exception) {
-      if (mounted) setState(() => error = exception.message);
+      if (failures.isNotEmpty) {
+        setState(() => error = failures.values.join('\n'));
+      }
+    } finally {
+      if (mounted) setState(() => _deleting = false);
     }
   }
 
@@ -291,7 +339,7 @@ class _TimelinePageState extends State<TimelinePage> {
                             context,
                           ).colorScheme.onError,
                         ),
-                        onPressed: _selectedIds.isEmpty
+                        onPressed: _selectedIds.isEmpty || _deleting
                             ? null
                             : _deleteSelected,
                         icon: const Icon(Icons.delete_outline),

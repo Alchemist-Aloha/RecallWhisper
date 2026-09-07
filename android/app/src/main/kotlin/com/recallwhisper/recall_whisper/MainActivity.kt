@@ -328,27 +328,78 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "deleteSegment" -> databaseExecutor.execute {
-                    val id = call.argument<String>("id")!!
-                    val dao = RecorderDatabase.get(this).segments()
-                    dao.byId(id)?.let {
-                        java.io.File(it.filePath).delete()
-                        dao.delete(id)
+                    val id = call.argument<String>("id")
+                    if (id.isNullOrBlank()) {
+                        runOnUiThread {
+                            result.error("invalid_id", "Missing recording id.", null)
+                        }
+                        return@execute
                     }
-                    runOnUiThread { result.success(null) }
-                }
-                "deleteEpisode" -> databaseExecutor.execute {
-                    val id = call.argument<String>("id")!!
-                    val dao = RecorderDatabase.get(this).segments()
-                    dao.episodeSegments(id).forEach { link ->
-                        dao.byId(link.segmentId)?.let {
-                            java.io.File(it.filePath).delete()
-                            dao.delete(link.segmentId)
+                    runCatching {
+                        val dao = RecorderDatabase.get(this).segments()
+                        val segment = dao.byId(id)
+                        if (segment != null) {
+                            java.io.File(segment.filePath).delete()
+                            dao.delete(id)
+                        }
+                        segment != null
+                    }.onSuccess { deleted ->
+                        runOnUiThread {
+                            if (deleted) {
+                                result.success(null)
+                            } else {
+                                result.error(
+                                    "not_found",
+                                    "This recording was already deleted.",
+                                    null,
+                                )
+                            }
+                        }
+                    }.onFailure { error ->
+                        runOnUiThread {
+                            result.error("delete_failed", error.message ?: "Could not delete this recording.", null)
                         }
                     }
-                    dao.deleteEpisodeSegments(id)
-                    dao.deleteEpisode(id)
-                    dao.deleteOrphanTopics()
-                    runOnUiThread { result.success(null) }
+                }
+                "deleteEpisode" -> databaseExecutor.execute {
+                    val id = call.argument<String>("id")
+                    if (id.isNullOrBlank()) {
+                        runOnUiThread {
+                            result.error("invalid_id", "Missing recording id.", null)
+                        }
+                        return@execute
+                    }
+                    runCatching {
+                        val dao = RecorderDatabase.get(this).segments()
+                        val episode = dao.episodeById(id)
+                        val links = dao.episodeSegments(id)
+                        links.forEach { link ->
+                            dao.byId(link.segmentId)?.let {
+                                java.io.File(it.filePath).delete()
+                                dao.delete(link.segmentId)
+                            }
+                        }
+                        dao.deleteEpisodeSegments(id)
+                        dao.deleteEpisode(id)
+                        dao.deleteOrphanTopics()
+                        episode != null || links.isNotEmpty()
+                    }.onSuccess { deleted ->
+                        runOnUiThread {
+                            if (deleted) {
+                                result.success(null)
+                            } else {
+                                result.error(
+                                    "not_found",
+                                    "This recording was already deleted.",
+                                    null,
+                                )
+                            }
+                        }
+                    }.onFailure { error ->
+                        runOnUiThread {
+                            result.error("delete_failed", error.message ?: "Could not delete this recording.", null)
+                        }
+                    }
                 }
                 "playSegment" -> databaseExecutor.execute {
                     val id = call.argument<String>("id")!!
