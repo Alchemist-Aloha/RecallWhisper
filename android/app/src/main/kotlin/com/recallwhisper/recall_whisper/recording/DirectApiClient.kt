@@ -111,7 +111,7 @@ class DirectApiClient(private val context: Context) {
                 "json_mode" to true,
             ),
         )
-        return JSONObject(response["output"] as String)
+        return parseSummaryObject(response["output"] as String)
     }
 
     fun models(): List<String> {
@@ -290,6 +290,31 @@ class DirectApiClient(private val context: Context) {
             "Organize continuous personal transcripts into faithful topic episodes. " +
                 "Preserve separate occurrences, timestamps, uncertainty, and recurring " +
                 "canonical topics. Never invent facts or candidate topic IDs."
+    }
+}
+
+internal fun parseSummaryObject(output: String): JSONObject {
+    val parsed = JSONObject(cleanJson(output))
+    return when (val nested = parsed.opt("json")) {
+        is JSONObject -> nested
+        is String -> JSONObject(cleanJson(nested))
+        else -> parsed
+    }
+}
+
+private fun cleanJson(value: String): String {
+    val trimmed = value.trim()
+    val unfenced = if (trimmed.startsWith("```")) {
+        trimmed.substringAfter('\n', trimmed).substringBeforeLast("```").trim()
+    } else {
+        trimmed
+    }
+    return if (unfenced.startsWith("json", ignoreCase = true) &&
+        unfenced.drop(4).trimStart().startsWith("{")
+    ) {
+        unfenced.drop(4).trimStart()
+    } else {
+        unfenced
     }
 }
 

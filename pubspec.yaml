@@ -1,7 +1,7 @@
 name: recall_whisper
 description: "Private, user-controlled ambient speech capture for Android."
 publish_to: none
-version: 1.1.0+3
+version: 1.2.0+4
 
 environment:
   sdk: ^3.12.2
